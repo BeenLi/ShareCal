@@ -181,3 +181,33 @@ final class CommentServiceTests: XCTestCase {
         XCTAssertNotNil(comment.deletedAt)
     }
 }
+
+final class ShareCalReviewSampleDataTests: XCTestCase {
+    func testBuildsReviewerPreviewWithBothMembersInvitationAndComment() {
+        let now = Date(timeIntervalSince1970: 1_800)
+
+        let sample = ShareCalReviewSampleData.build(
+            now: now,
+            currentMemberID: "me",
+            partnerMemberID: "partner"
+        )
+
+        XCTAssertEqual(sample.mirrors.count, 4)
+        XCTAssertEqual(Set(sample.mirrors.map(\.ownerMemberID)), ["me", "partner"])
+        XCTAssertTrue(sample.mirrors.allSatisfy { $0.sourceCalendarTitle == "ShareCal Preview" })
+        XCTAssertEqual(sample.invitations.count, 1)
+        XCTAssertEqual(sample.invitations[0].creatorMemberID, "me")
+        XCTAssertEqual(sample.invitations[0].inviteeMemberID, "partner")
+        XCTAssertEqual(sample.comments.count, 1)
+        XCTAssertEqual(sample.comments[0].authorMemberID, "partner")
+    }
+}
+
+final class ShareCalModelContainerTests: XCTestCase {
+    @MainActor
+    func testMakesLocalContainerWhenCloudKitEntitlementsArePresent() throws {
+        let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
+
+        XCTAssertNotNil(container)
+    }
+}

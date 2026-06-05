@@ -179,3 +179,132 @@ struct CommentService {
         comment.deletedAt = now()
     }
 }
+
+struct ShareCalReviewSample {
+    let mirrors: [EventMirror]
+    let invitations: [EventInvitation]
+    let comments: [EventComment]
+}
+
+enum ShareCalReviewSampleData {
+    static let sourceCalendarID = "sharecal-preview"
+    static let sourceCalendarTitle = "ShareCal Preview"
+
+    static func build(
+        now: Date = .now,
+        currentMemberID: String,
+        partnerMemberID: String
+    ) -> ShareCalReviewSample {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: now)
+        let dayID = Int(dayStart.timeIntervalSince1970)
+
+        func date(hour: Int, minute: Int = 0) -> Date {
+            calendar.date(bySettingHour: hour, minute: minute, second: 0, of: dayStart)
+                ?? dayStart.addingTimeInterval(TimeInterval((hour * 60 + minute) * 60))
+        }
+
+        func mirror(
+            suffix: String,
+            ownerMemberID: String,
+            title: String,
+            startHour: Int,
+            startMinute: Int = 0,
+            endHour: Int,
+            endMinute: Int = 0,
+            location: String?,
+            notes: String?,
+            colorHex: String
+        ) -> EventMirror {
+            let startDate = date(hour: startHour, minute: startMinute)
+            let mirrorKey = "\(Self.sourceCalendarID):\(ownerMemberID):\(suffix):\(dayID)"
+            return EventMirror(
+                id: mirrorKey,
+                ownerMemberID: ownerMemberID,
+                mirrorKey: mirrorKey,
+                sourceCalendarID: Self.sourceCalendarID,
+                sourceCalendarTitle: Self.sourceCalendarTitle,
+                occurrenceStartDate: startDate,
+                startDate: startDate,
+                endDate: date(hour: endHour, minute: endMinute),
+                isAllDay: false,
+                timeZoneIdentifier: TimeZone.current.identifier,
+                title: title,
+                location: location,
+                notes: notes,
+                urlString: nil,
+                calendarColorHex: colorHex,
+                visibilityRawValue: EventVisibility.fullDetails.rawValue,
+                deletedAt: nil,
+                cloudKitRecordName: nil
+            )
+        }
+
+        let myFocus = mirror(
+            suffix: "me-focus",
+            ownerMemberID: currentMemberID,
+            title: "Focus block",
+            startHour: 9,
+            endHour: 10,
+            location: nil,
+            notes: "Sample private work block.",
+            colorHex: "#3A86FF"
+        )
+        let myErrand = mirror(
+            suffix: "me-errand",
+            ownerMemberID: currentMemberID,
+            title: "Pick up groceries",
+            startHour: 17,
+            startMinute: 30,
+            endHour: 18,
+            location: "Market",
+            notes: "Shared household errand.",
+            colorHex: "#4CC9F0"
+        )
+        let partnerGym = mirror(
+            suffix: "partner-gym",
+            ownerMemberID: partnerMemberID,
+            title: "Gym class",
+            startHour: 7,
+            endHour: 8,
+            location: "Fitness studio",
+            notes: nil,
+            colorHex: "#FF006E"
+        )
+        let partnerDinner = mirror(
+            suffix: "partner-dinner",
+            ownerMemberID: partnerMemberID,
+            title: "Dinner with friends",
+            startHour: 19,
+            endHour: 21,
+            location: "Preview Bistro",
+            notes: "Sample shared availability.",
+            colorHex: "#FB5607"
+        )
+
+        let invitation = EventInvitation(
+            id: "\(Self.sourceCalendarID):invite:\(dayID)",
+            creatorMemberID: currentMemberID,
+            inviteeMemberID: partnerMemberID,
+            title: "Plan dinner together",
+            startDate: date(hour: 20),
+            endDate: date(hour: 21),
+            location: "Preview Bistro",
+            notes: "Sample invitation for TestFlight review."
+        )
+
+        let comment = EventComment(
+            id: "\(Self.sourceCalendarID):comment:\(dayID)",
+            eventMirrorID: partnerDinner.id,
+            authorMemberID: partnerMemberID,
+            body: "I can leave after this.",
+            createdAt: date(hour: 18, minute: 30)
+        )
+
+        return ShareCalReviewSample(
+            mirrors: [myFocus, myErrand, partnerGym, partnerDinner],
+            invitations: [invitation],
+            comments: [comment]
+        )
+    }
+}

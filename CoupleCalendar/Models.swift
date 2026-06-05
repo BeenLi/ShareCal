@@ -344,3 +344,24 @@ final class SyncState {
         self.pendingMutationCount = pendingMutationCount
     }
 }
+
+enum ShareCalModelContainer {
+    static let schema = Schema([
+        CoupleSpace.self,
+        MemberProfile.self,
+        EventMirror.self,
+        LocalEventShadow.self,
+        EventInvitation.self,
+        EventComment.self,
+        SyncState.self
+    ])
+
+    static func make(isStoredInMemoryOnly: Bool = false) throws -> ModelContainer {
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: isStoredInMemoryOnly,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(for: schema, configurations: [configuration])
+    }
+}

@@ -45,9 +45,13 @@ struct CalendarTabView: View {
     @State private var mode: CalendarMode = .day
     @State private var selectedEvent: EventMirror?
 
+    var activeMirrors: [EventMirror] {
+        mirrors.filter { $0.deletedAt == nil }
+    }
+
     var visibleMirrors: [EventMirror] {
-        mirrors.filter { mirror in
-            mirror.deletedAt == nil && visibleInterval.contains(mirror.startDate)
+        activeMirrors.filter { mirror in
+            visibleInterval.contains(mirror.startDate)
         }
     }
 
@@ -86,33 +90,41 @@ struct CalendarTabView: View {
 
             SyncStatusBar()
 
-            GeometryReader { proxy in
-                ScrollView {
-                    HStack(alignment: .top, spacing: 10) {
-                        TimelineColumn(
-                            title: "我",
-                            subtitle: settings.currentMemberID,
-                            events: myEvents,
-                            tint: .blue,
-                            width: max(160, (proxy.size.width - 30) / 2),
-                            onSelect: { selectedEvent = $0 }
-                        )
+            if activeMirrors.isEmpty {
+                ShareCalEmptyState {
+                    loadReviewSampleData()
+                }
+                .padding(.horizontal)
+                .frame(maxHeight: .infinity, alignment: .center)
+            } else {
+                GeometryReader { proxy in
+                    ScrollView {
+                        HStack(alignment: .top, spacing: 10) {
+                            TimelineColumn(
+                                title: "Me",
+                                subtitle: settings.currentMemberID,
+                                events: myEvents,
+                                tint: .blue,
+                                width: max(160, (proxy.size.width - 30) / 2),
+                                onSelect: { selectedEvent = $0 }
+                            )
 
-                        TimelineColumn(
-                            title: "对方",
-                            subtitle: settings.partnerMemberID,
-                            events: partnerEvents,
-                            tint: .pink,
-                            width: max(160, (proxy.size.width - 30) / 2),
-                            onSelect: { selectedEvent = $0 }
-                        )
+                            TimelineColumn(
+                                title: "Partner",
+                                subtitle: settings.partnerMemberID,
+                                events: partnerEvents,
+                                tint: .pink,
+                                width: max(160, (proxy.size.width - 30) / 2),
+                                onSelect: { selectedEvent = $0 }
+                            )
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom, 24)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 24)
                 }
             }
         }
-        .navigationTitle("CoupleCalendar")
+        .navigationTitle("ShareCal")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -132,6 +144,37 @@ struct CalendarTabView: View {
         }
         .sheet(item: $selectedEvent) { event in
             EventDetailView(event: event)
+        }
+    }
+
+    private func loadReviewSampleData() {
+        selectedDate = Date()
+        if activeMirrors.contains(where: { $0.sourceCalendarID == ShareCalReviewSampleData.sourceCalendarID }) {
+            return
+        }
+
+        let sample = ShareCalReviewSampleData.build(
+            currentMemberID: settings.currentMemberID,
+            partnerMemberID: settings.partnerMemberID
+        )
+        sample.mirrors.forEach(modelContext.insert)
+        sample.invitations.forEach(modelContext.insert)
+        sample.comments.forEach(modelContext.insert)
+        try? modelContext.save()
+    }
+}
+
+struct ShareCalEmptyState: View {
+    let onLoadSampleData: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("No shared schedules", systemImage: "calendar.badge.plus")
+        } description: {
+            Text("Preview a paired schedule or choose calendars in Settings.")
+        } actions: {
+            Button("Load Sample Schedule", action: onLoadSampleData)
+                .buttonStyle(.borderedProminent)
         }
     }
 }
@@ -546,9 +589,9 @@ struct SettingsTabView: View {
 
         List {
             Section("Members") {
-                TextField("My member ID", text: $settings.currentMemberID)
+                TextField("My display name", text: $settings.currentMemberID)
                     .textInputAutocapitalization(.never)
-                TextField("Partner member ID", text: $settings.partnerMemberID)
+                TextField("Partner display name", text: $settings.partnerMemberID)
                     .textInputAutocapitalization(.never)
             }
 
@@ -575,7 +618,7 @@ struct SettingsTabView: View {
                 }
             }
 
-            Section("Shared Calendars") {
+            Section("Calendars to Share") {
                 if calendars.isEmpty {
                     Text("No calendars loaded")
                         .foregroundStyle(.secondary)
@@ -604,23 +647,22 @@ struct SettingsTabView: View {
                 }
             }
 
-            Section("CloudKit Share") {
-                Button("Create or Open CoupleSpace Share") {
+            Section("iCloud Share") {
+                Button("Create or Open Share") {
                     Task { await prepareShare() }
                 }
                 .disabled(!services.isCloudKitEnabled)
-                Text("Uses iCloud.com.leeberty.CoupleCalendar and CKShare with write access for the partner.")
+                Text("Creates a private iCloud share for the invited partner.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !services.isCloudKitEnabled {
-                    Text("Disabled for Personal Team debug signing. Use a paid Apple Developer Team and Release CloudKit entitlements for sharing.")
+                    Text("iCloud sharing is unavailable in this local build.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
             }
 
-            Section("Debug") {
-                LabeledContent("Sync window", value: "90 days past / 365 days future")
+            Section("Sync") {
                 LabeledContent("Last sync", value: settings.lastSyncAt?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
                 if let errorMessage {
                     Text(errorMessage)
@@ -689,7 +731,7 @@ struct SettingsTabView: View {
 
     private func prepareShare() async {
         guard let cloudKit = services.cloudKitIfAvailable else {
-            errorMessage = "CloudKit sharing requires a paid Apple Developer Team. The current Debug build is configured for Personal Team local testing."
+            errorMessage = "iCloud sharing is unavailable in this local build."
             return
         }
 

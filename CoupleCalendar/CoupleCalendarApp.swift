@@ -7,19 +7,8 @@ struct CoupleCalendarApp: App {
     @State private var services = AppServices()
 
     private let modelContainer: ModelContainer = {
-        let schema = Schema([
-            CoupleSpace.self,
-            MemberProfile.self,
-            EventMirror.self,
-            LocalEventShadow.self,
-            EventInvitation.self,
-            EventComment.self,
-            SyncState.self
-        ])
-        let configuration = ModelConfiguration(schema: schema)
-
         do {
-            return try ModelContainer(for: schema, configurations: [configuration])
+            return try ShareCalModelContainer.make()
         } catch {
             fatalError("Unable to create SwiftData container: \(error)")
         }

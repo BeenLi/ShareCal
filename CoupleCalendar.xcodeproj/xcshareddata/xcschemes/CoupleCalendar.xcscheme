@@ -41,6 +41,16 @@
                ReferencedContainer = "container:CoupleCalendar.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "11A000340000000000000001"
+               BuildableName = "CoupleCalendarUITests.xctest"
+               BlueprintName = "CoupleCalendarUITests"
+               ReferencedContainer = "container:CoupleCalendar.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
