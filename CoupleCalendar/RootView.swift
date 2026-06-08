@@ -10,9 +10,10 @@ enum ShareCalTab {
 
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(SettingsStore.self) private var settings
     @Environment(AppServices.self) private var services
-    @State private var isSyncingAcceptedShare = false
+    @State private var isRunningForegroundSync = false
     @State private var selectedTab: ShareCalTab = .calendar
     @State private var calendarFocusRequest: CalendarFocusRequest?
 
@@ -54,15 +55,43 @@ struct RootView: View {
                 await syncAfterAcceptedShareIfNeeded()
             }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task {
+                await syncAfterSceneBecameActiveIfNeeded()
+            }
+        }
     }
 
     @MainActor
     private func syncAfterAcceptedShareIfNeeded() async {
-        guard !isSyncingAcceptedShare else { return }
-        guard ShareCalAcceptedShareSignal.consumePending() else { return }
+        guard ShareCalAcceptedShareSignal.hasPending() else { return }
+        await runForegroundSync(consumingAcceptedShareSignal: true)
+    }
 
-        isSyncingAcceptedShare = true
-        defer { isSyncingAcceptedShare = false }
+    @MainActor
+    private func syncAfterSceneBecameActiveIfNeeded(now: Date = .now) async {
+        let hasPendingAcceptedShare = ShareCalAcceptedShareSignal.hasPending()
+        guard ForegroundSyncPlan.shouldRunAutomaticSync(
+            lastSyncAt: settings.lastSyncAt,
+            now: now,
+            syncPhase: settings.syncPhase,
+            hasPendingAcceptedShare: hasPendingAcceptedShare
+        ) else { return }
+
+        await runForegroundSync(consumingAcceptedShareSignal: hasPendingAcceptedShare)
+    }
+
+    @MainActor
+    private func runForegroundSync(consumingAcceptedShareSignal: Bool) async {
+        guard !isRunningForegroundSync else { return }
+        guard settings.syncPhase != .syncing else { return }
+        if consumingAcceptedShareSignal {
+            guard ShareCalAcceptedShareSignal.consumePending() else { return }
+        }
+
+        isRunningForegroundSync = true
+        defer { isRunningForegroundSync = false }
 
         let coordinator = SyncCoordinator(
             calendarAccess: services.calendarAccess,

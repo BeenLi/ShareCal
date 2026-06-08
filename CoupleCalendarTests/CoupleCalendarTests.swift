@@ -1588,6 +1588,97 @@ final class ShareCalAcceptedShareSignalTests: XCTestCase {
         XCTAssertTrue(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
         XCTAssertFalse(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
     }
+
+    func testHasPendingReportsSignalWithoutConsumingIt() throws {
+        let suiteName = "ShareCalAcceptedShareSignalTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
+
+        ShareCalAcceptedShareSignal.markAccepted(defaults: defaults, notificationCenter: NotificationCenter())
+
+        XCTAssertTrue(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
+        XCTAssertTrue(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
+        XCTAssertFalse(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
+    }
+}
+
+final class ForegroundSyncPlanTests: XCTestCase {
+    func testAllowsAutomaticSyncWhenThereIsNoPreviousSync() {
+        XCTAssertTrue(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: nil,
+                now: Date(timeIntervalSince1970: 1_000),
+                syncPhase: .idle,
+                hasPendingAcceptedShare: false
+            )
+        )
+    }
+
+    func testSkipsAutomaticSyncWhenLastSyncIsWithinThrottleWindow() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let lastSyncAt = now.addingTimeInterval(-299)
+
+        XCTAssertFalse(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: lastSyncAt,
+                now: now,
+                syncPhase: .idle,
+                hasPendingAcceptedShare: false
+            )
+        )
+    }
+
+    func testAllowsAutomaticSyncWhenThrottleWindowHasElapsed() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let lastSyncAt = now.addingTimeInterval(-ForegroundSyncPlan.automaticThrottleInterval)
+
+        XCTAssertTrue(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: lastSyncAt,
+                now: now,
+                syncPhase: .idle,
+                hasPendingAcceptedShare: false
+            )
+        )
+    }
+
+    func testSkipsAutomaticSyncWhileSyncing() {
+        XCTAssertFalse(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: nil,
+                now: Date(timeIntervalSince1970: 1_000),
+                syncPhase: .syncing,
+                hasPendingAcceptedShare: false
+            )
+        )
+    }
+
+    func testPendingAcceptedShareBypassesThrottleWhenIdle() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let lastSyncAt = now.addingTimeInterval(-1)
+
+        XCTAssertTrue(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: lastSyncAt,
+                now: now,
+                syncPhase: .idle,
+                hasPendingAcceptedShare: true
+            )
+        )
+    }
+
+    func testPendingAcceptedShareDoesNotStartDuplicateSync() {
+        XCTAssertFalse(
+            ForegroundSyncPlan.shouldRunAutomaticSync(
+                lastSyncAt: nil,
+                now: Date(timeIntervalSince1970: 1_000),
+                syncPhase: .syncing,
+                hasPendingAcceptedShare: true
+            )
+        )
+    }
 }
 
 final class ShareCalSceneDelegateConfigurationTests: XCTestCase {
@@ -2016,6 +2107,130 @@ final class DayTimelineScrollTargetPlanTests: XCTestCase {
         )
 
         XCTAssertEqual(targetY, 870, accuracy: 0.001)
+    }
+}
+
+final class CloudKitMirrorSyncPlanTests: XCTestCase {
+    func testSkipsUnchangedActiveMirrors() {
+        let existing = eventMirror(id: "event-1", title: "Planning")
+        let current = eventMirror(id: "event-1", title: "Planning")
+        let shadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [current],
+            activeShadows: [shadow],
+            existingShadows: [shadow],
+            existingLocalMirrors: [existing]
+        )
+
+        XCTAssertTrue(mirrors.isEmpty)
+    }
+
+    func testUploadsNewActiveMirrors() {
+        let current = eventMirror(id: "event-1", title: "Planning")
+        let shadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [current],
+            activeShadows: [shadow],
+            existingShadows: [],
+            existingLocalMirrors: []
+        )
+
+        XCTAssertEqual(mirrors.map(\.mirrorKey), ["work:event-1:1800"])
+    }
+
+    func testUploadsChangedActiveMirrors() {
+        let existing = eventMirror(id: "event-1", title: "Planning")
+        let current = eventMirror(id: "event-1", title: "Updated")
+        let activeShadow = localShadow(id: "event-1", fingerprint: "new", isTombstone: false)
+        let existingShadow = localShadow(id: "event-1", fingerprint: "old", isTombstone: false)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [current],
+            activeShadows: [activeShadow],
+            existingShadows: [existingShadow],
+            existingLocalMirrors: [existing]
+        )
+
+        XCTAssertEqual(mirrors.map(\.title), ["Updated"])
+    }
+
+    func testUploadsVisibilityOnlyChangesWhenFingerprintIsUnchanged() {
+        let existing = eventMirror(id: "event-1", title: "Planning", visibility: .fullDetails)
+        let current = eventMirror(id: "event-1", title: "Busy", visibility: .busyOnly)
+        let shadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [current],
+            activeShadows: [shadow],
+            existingShadows: [shadow],
+            existingLocalMirrors: [existing]
+        )
+
+        XCTAssertEqual(mirrors.map(\.visibilityRawValue), [EventVisibility.busyOnly.rawValue])
+    }
+
+    func testUploadsDeletedMirrors() {
+        let deletedAt = Date(timeIntervalSince1970: 5_000)
+        let existing = eventMirror(id: "event-1", title: "Planning")
+        let deleted = eventMirror(id: "event-1", title: "Planning", deletedAt: deletedAt)
+        let existingShadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [deleted],
+            activeShadows: [],
+            existingShadows: [existingShadow],
+            existingLocalMirrors: [existing]
+        )
+
+        XCTAssertEqual(mirrors.count, 1)
+        XCTAssertEqual(mirrors[0].deletedAt, deletedAt)
+    }
+
+    private func eventMirror(
+        id: String,
+        title: String,
+        visibility: EventVisibility = .fullDetails,
+        deletedAt: Date? = nil
+    ) -> EventMirror {
+        EventMirror(
+            id: "work:\(id):1800",
+            ownerMemberID: "me",
+            mirrorKey: "work:\(id):1800",
+            sourceCalendarID: "work",
+            sourceCalendarTitle: "Work",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_800),
+            startDate: Date(timeIntervalSince1970: 1_800),
+            endDate: Date(timeIntervalSince1970: 3_600),
+            isAllDay: false,
+            timeZoneIdentifier: "Asia/Singapore",
+            title: title,
+            location: "Cafe",
+            notes: "Bring notes",
+            urlString: "https://example.com",
+            calendarColorHex: "#3A86FF",
+            visibilityRawValue: visibility.rawValue,
+            deletedAt: deletedAt,
+            cloudKitRecordName: "work:\(id):1800"
+        )
+    }
+
+    private func localShadow(
+        id: String,
+        fingerprint: String,
+        isTombstone: Bool
+    ) -> LocalEventShadow {
+        LocalEventShadow(
+            id: "work:\(id):1800",
+            localEventIdentifier: id,
+            calendarIdentifier: "work",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_800),
+            fingerprint: fingerprint,
+            cloudKitRecordName: "work:\(id):1800",
+            lastUploadedAt: Date(timeIntervalSince1970: 2_000),
+            isTombstone: isTombstone
+        )
     }
 }
 

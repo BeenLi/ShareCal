@@ -313,6 +313,10 @@ enum ShareCalAcceptedShareSignal {
         notificationCenter.post(name: notificationName, object: nil)
     }
 
+    static func hasPending(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: pendingSyncKey)
+    }
+
     static func consumePending(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.bool(forKey: pendingSyncKey) else { return false }
         defaults.set(false, forKey: pendingSyncKey)
@@ -811,6 +815,22 @@ enum SyncPhase: String {
     case failed
 }
 
+enum ForegroundSyncPlan {
+    static let automaticThrottleInterval: TimeInterval = 5 * 60
+
+    static func shouldRunAutomaticSync(
+        lastSyncAt: Date?,
+        now: Date,
+        syncPhase: SyncPhase,
+        hasPendingAcceptedShare: Bool
+    ) -> Bool {
+        guard syncPhase != .syncing else { return false }
+        if hasPendingAcceptedShare { return true }
+        guard let lastSyncAt else { return true }
+        return now.timeIntervalSince(lastSyncAt) >= automaticThrottleInterval
+    }
+}
+
 struct CalendarDescriptor: Identifiable, Hashable {
     let id: String
     let title: String
@@ -1044,6 +1064,52 @@ final class LocalEventShadow {
         self.cloudKitRecordName = cloudKitRecordName
         self.lastUploadedAt = lastUploadedAt
         self.isTombstone = isTombstone
+    }
+}
+
+enum CloudKitMirrorSyncPlan {
+    static func mirrorsNeedingUpload(
+        _ mirrors: [EventMirror],
+        activeShadows: [LocalEventShadow],
+        existingShadows: [LocalEventShadow],
+        existingLocalMirrors: [EventMirror]
+    ) -> [EventMirror] {
+        let activeShadowByID = Dictionary(activeShadows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let existingShadowByID = Dictionary(existingShadows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let existingMirrorByKey = Dictionary(existingLocalMirrors.map { ($0.mirrorKey, $0) }, uniquingKeysWith: { first, _ in first })
+
+        return mirrors.filter { mirror in
+            if mirror.deletedAt != nil { return true }
+            guard let existingMirror = existingMirrorByKey[mirror.mirrorKey] else { return true }
+            guard hasSameCloudKitPayload(mirror, as: existingMirror) else { return true }
+            guard let activeShadow = activeShadowByID[mirror.mirrorKey],
+                  let existingShadow = existingShadowByID[mirror.mirrorKey] else {
+                return true
+            }
+            return activeShadow.fingerprint != existingShadow.fingerprint
+                || activeShadow.cloudKitRecordName != existingShadow.cloudKitRecordName
+                || activeShadow.isTombstone != existingShadow.isTombstone
+        }
+    }
+
+    private static func hasSameCloudKitPayload(_ lhs: EventMirror, as rhs: EventMirror) -> Bool {
+        lhs.ownerMemberID == rhs.ownerMemberID
+            && lhs.mirrorKey == rhs.mirrorKey
+            && lhs.sourceCalendarID == rhs.sourceCalendarID
+            && lhs.sourceCalendarTitle == rhs.sourceCalendarTitle
+            && lhs.occurrenceStartDate == rhs.occurrenceStartDate
+            && lhs.startDate == rhs.startDate
+            && lhs.endDate == rhs.endDate
+            && lhs.isAllDay == rhs.isAllDay
+            && lhs.timeZoneIdentifier == rhs.timeZoneIdentifier
+            && lhs.title == rhs.title
+            && lhs.location == rhs.location
+            && lhs.notes == rhs.notes
+            && lhs.urlString == rhs.urlString
+            && lhs.calendarColorHex == rhs.calendarColorHex
+            && lhs.visibilityRawValue == rhs.visibilityRawValue
+            && lhs.deletedAt == rhs.deletedAt
+            && lhs.cloudKitRecordName == rhs.cloudKitRecordName
     }
 }
 
