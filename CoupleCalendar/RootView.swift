@@ -131,6 +131,14 @@ struct CalendarTabView: View {
         mirrors.filter { $0.deletedAt == nil }
     }
 
+    var isPaired: Bool {
+        PairingSettingsPlan.status(
+            hasStartedPairing: settings.hasStartedPairing,
+            outgoingParticipantIDs: settings.outgoingShareParticipantIDs,
+            incomingOwnerID: settings.partnerShareOwnerID
+        ) == .paired
+    }
+
     var visibleMirrors: [EventMirror] {
         CalendarMirrorVisibilityPlan.memberMirrors(
             activeMirrors,
@@ -219,6 +227,11 @@ struct CalendarTabView: View {
             )
             .padding(.horizontal)
             .padding(.top, 8)
+
+            if isPaired, let pairingDate = settings.pairingDate {
+                CalendarPairingStatusLine(pairingDate: pairingDate)
+                    .padding(.horizontal)
+            }
 
             if settings.syncPhase == .failed, let lastSyncError = settings.lastSyncError {
                 CompactSyncErrorBanner(message: lastSyncError)
@@ -519,6 +532,28 @@ struct CompactSyncErrorBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct CalendarPairingStatusLine: View {
+    @Environment(SettingsStore.self) private var settings
+    let pairingDate: Date
+
+    var body: some View {
+        let strings = settings.strings
+        let dayCount = PairingDatePlan.dayCount(since: pairingDate)
+        let dateText = strings.pairingDateText(for: pairingDate)
+
+        Label(
+            strings.calendarPairingStatusLine(dayCount: dayCount, dateText: dateText),
+            systemImage: "heart.circle.fill"
+        )
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("calendar-pairing-status-line")
     }
 }
 
@@ -2414,6 +2449,340 @@ struct InvitationRow: View {
     }
 }
 
+enum SettingsSheet: Identifiable {
+    case historyRequest
+
+    var id: String {
+        switch self {
+        case .historyRequest: "historyRequest"
+        }
+    }
+}
+
+struct PairingStatusCard: View {
+    @Environment(SettingsStore.self) private var settings
+    let status: PairingStatus
+    let pairingDate: Date?
+    let partnerNickname: String
+    let partnerICloudIdentity: String
+    let isCloudKitEnabled: Bool
+    let isPreparingShare: Bool
+    let isCheckingCloudKitAccount: Bool
+    let isSyncing: Bool
+    let isStoppingShare: Bool
+    let cloudKitDiagnosticMessage: String?
+    let onStartPairing: () -> Void
+    let onCheckCloudKitStatus: () -> Void
+    let onSync: () -> Void
+    let onRequestHistory: () -> Void
+    let onUnpair: () -> Void
+
+    var body: some View {
+        let strings = settings.strings
+
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                Text(strings.pairingSection)
+                    .font(.headline)
+                Spacer()
+                Text(strings.pairingStatusTitle(for: status))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusTint)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(statusTint.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+
+            if status == .notPaired {
+                notPairedContent(strings: strings)
+            } else if status == .paired {
+                pairedContent(strings: strings)
+            } else {
+                pairingInProgressContent(strings: strings)
+            }
+
+            if !isCloudKitEnabled {
+                Text(strings.iCloudSharingUnavailableLocalBuild)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            if let cloudKitDiagnosticMessage {
+                Text(cloudKitDiagnosticMessage)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(.separator).opacity(0.24), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func notPairedContent(strings: ShareCalStrings) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(strings.pairingDescription)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button {
+                    onStartPairing()
+                } label: {
+                    Label(strings.startPairingButton(isPreparing: isPreparingShare), systemImage: "person.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isCloudKitEnabled || isPreparingShare)
+
+                Button {
+                    onCheckCloudKitStatus()
+                } label: {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!isCloudKitEnabled || isCheckingCloudKitAccount)
+                .accessibilityLabel(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount))
+            }
+        }
+    }
+
+    private func pairedContent(strings: ShareCalStrings) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let pairingDate {
+                let dayCount = PairingDatePlan.dayCount(since: pairingDate)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(strings.pairingDayCountText(dayCount))
+                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Text(strings.pairingDateLine(strings.pairingDateText(for: pairingDate)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("pairing-day-count")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(partnerNickname)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Text("\(strings.partnerICloudIdentityLabel): \(partnerICloudIdentity)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(strings.sharingScopeTitle)
+                    .font(.subheadline.weight(.semibold))
+                SharingScopeRow(label: strings.sharingMyCalendarLabel, value: strings.sharedAfterPairingDateValue)
+                SharingScopeRow(label: strings.partnersCalendarLabel, value: strings.sharedAfterPairingDateValue)
+                SharingScopeRow(label: strings.prePairingHistoryLabel, value: strings.requestRequiredValue)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    onSync()
+                } label: {
+                    Label(strings.syncAccessibilityLabel, systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSyncing)
+
+                Button {
+                    onRequestHistory()
+                } label: {
+                    Label(strings.requestHistoryAccessButton, systemImage: "clock.arrow.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!isCloudKitEnabled || pairingDate == nil)
+            }
+
+            Button(role: .destructive) {
+                onUnpair()
+            } label: {
+                Label(strings.unpairButton, systemImage: "person.2.slash")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isCloudKitEnabled || isStoppingShare)
+        }
+    }
+
+    private func pairingInProgressContent(strings: ShareCalStrings) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(strings.pairingDescription)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let pairingDate {
+                Text(strings.pairingDateLine(strings.pairingDateText(for: pairingDate)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    onSync()
+                } label: {
+                    Label(strings.syncAccessibilityLabel, systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSyncing)
+
+                Button {
+                    onCheckCloudKitStatus()
+                } label: {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!isCloudKitEnabled || isCheckingCloudKitAccount)
+                .accessibilityLabel(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount))
+            }
+
+            Button(role: .destructive) {
+                onUnpair()
+            } label: {
+                Label(strings.unpairButton, systemImage: "person.2.slash")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isCloudKitEnabled || isStoppingShare)
+        }
+    }
+
+    private var statusTint: Color {
+        switch status {
+        case .notPaired:
+            return .secondary
+        case .waitingForPartner, .waitingForPartnerToShare:
+            return .orange
+        case .paired:
+            return .pink
+        }
+    }
+}
+
+struct SharingScopeRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.caption)
+    }
+}
+
+struct HistoryRequestSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var settings
+    let pairingDate: Date
+    let onSend: (Date, Date) -> Bool
+    @State private var startDate: Date
+    @State private var endDate: Date
+    @State private var validationMessage: String?
+
+    init(pairingDate: Date, onSend: @escaping (Date, Date) -> Bool) {
+        self.pairingDate = pairingDate
+        self.onSend = onSend
+        let range = PairingDatePlan.defaultHistoryRequestRange(pairingDate: pairingDate)
+        _startDate = State(initialValue: range.start)
+        _endDate = State(initialValue: range.end)
+    }
+
+    var body: some View {
+        let strings = settings.strings
+
+        NavigationStack {
+            Form {
+                Section {
+                    Text(strings.prePairingHistoryRequestDescription)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    DatePicker(
+                        strings.accessRequestStartLabel,
+                        selection: $startDate,
+                        in: ...maxSelectableDate,
+                        displayedComponents: .date
+                    )
+                    DatePicker(
+                        strings.accessRequestEndLabel,
+                        selection: $endDate,
+                        in: ...maxSelectableDate,
+                        displayedComponents: .date
+                    )
+
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Section {
+                    Button(strings.sendRequestButton) {
+                        send()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+            .navigationTitle(strings.prePairingHistoryRequestTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(strings.cancelButton) {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private var maxSelectableDate: Date {
+        PairingDatePlan.defaultHistoryRequestRange(pairingDate: pairingDate).end
+    }
+
+    private func send() {
+        let calendar = Calendar.current
+        let normalizedStartDate = calendar.startOfDay(for: startDate)
+        let exclusiveEndDate = PairingDatePlan.exclusiveEndDate(forDisplayedEndDate: endDate, calendar: calendar)
+        guard exclusiveEndDate > normalizedStartDate else {
+            validationMessage = settings.strings.invalidAccessRequestRangeMessage
+            return
+        }
+        validationMessage = nil
+        if onSend(startDate, endDate) {
+            dismiss()
+        }
+    }
+}
+
 struct SettingsTabView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
@@ -2433,8 +2802,7 @@ struct SettingsTabView: View {
     @State private var isStoppingShare = false
     @State private var isDeletingICloudData = false
     @State private var activeSharePreparationID: UUID?
-    @State private var requestStartDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-    @State private var requestEndDate = Calendar.current.date(byAdding: .day, value: -4, to: Date()) ?? Date()
+    @State private var activeSettingsSheet: SettingsSheet?
     @State private var showStopSharingConfirmation = false
     @State private var showDeleteICloudDataConfirmation = false
 
@@ -2471,21 +2839,6 @@ struct SettingsTabView: View {
         )
     }
 
-    private var outgoingPairingCalendarStatus: PairingCalendarStatus {
-        PairingSettingsPlan.outgoingStatus(
-            hasStartedPairing: settings.hasStartedPairing,
-            outgoingParticipantIDs: settings.outgoingShareParticipantIDs
-        )
-    }
-
-    private var incomingPairingCalendarStatus: PairingCalendarStatus {
-        let incomingStatus = PairingSettingsPlan.incomingStatus(incomingOwnerID: settings.partnerShareOwnerID)
-        if incomingStatus == .unavailable && outgoingPairingCalendarStatus == .on {
-            return .waitingForPartnerToShare
-        }
-        return incomingStatus
-    }
-
     private var partnerICloudIdentityValue: String {
         PairingSettingsPlan.partnerIdentity(
             incomingOwnerID: settings.partnerShareOwnerID,
@@ -2499,67 +2852,37 @@ struct SettingsTabView: View {
         let strings = settings.strings
 
         List {
-            Section(strings.pairingSection) {
-                Text(strings.pairingStatusTitle(for: pairingStatus))
-                    .font(.headline)
-
-                if pairingStatus == .notPaired {
-                    Text(strings.pairingDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button(strings.startPairingButton(isPreparing: isPreparingShare)) {
+            Section {
+                PairingStatusCard(
+                    status: pairingStatus,
+                    pairingDate: settings.pairingDate,
+                    partnerNickname: settings.partnerMemberID,
+                    partnerICloudIdentity: partnerICloudIdentityValue,
+                    isCloudKitEnabled: services.isCloudKitEnabled,
+                    isPreparingShare: isPreparingShare,
+                    isCheckingCloudKitAccount: isCheckingCloudKitAccount,
+                    isSyncing: settings.syncPhase == .syncing,
+                    isStoppingShare: isStoppingShare,
+                    cloudKitDiagnosticMessage: cloudKitDiagnosticMessage,
+                    onStartPairing: {
                         Task { await prepareShare() }
-                    }
-                    .disabled(!services.isCloudKitEnabled || isPreparingShare)
-                    Button(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount)) {
+                    },
+                    onCheckCloudKitStatus: {
                         Task { await checkCloudKitStatus() }
-                    }
-                    .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
-                } else {
-                    Text(strings.pairingPartnerLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    LabeledContent(strings.partnerNicknameLabel, value: settings.partnerMemberID)
-                    LabeledContent(strings.partnerICloudIdentityLabel, value: partnerICloudIdentityValue)
-                    LabeledContent(
-                        strings.sharingMyCalendarLabel,
-                        value: strings.pairingCalendarStatusTitle(for: outgoingPairingCalendarStatus)
-                    )
-                    LabeledContent(
-                        strings.partnersCalendarLabel,
-                        value: strings.pairingCalendarStatusTitle(for: incomingPairingCalendarStatus)
-                    )
-                    Button(strings.syncAccessibilityLabel) {
+                    },
+                    onSync: {
                         syncNow()
-                    }
-                    .disabled(settings.syncPhase == .syncing)
-                    Button(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount)) {
-                        Task { await checkCloudKitStatus() }
-                    }
-                    .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
-                    Button(strings.unpairButton, role: .destructive) {
+                    },
+                    onRequestHistory: {
+                        ensurePairingDateIfNeeded()
+                        activeSettingsSheet = .historyRequest
+                    },
+                    onUnpair: {
                         showStopSharingConfirmation = true
                     }
-                    .disabled(!services.isCloudKitEnabled || isStoppingShare || isDeletingICloudData)
-                    Button(
-                        isDeletingICloudData ? strings.deletingICloudDataButton : strings.deleteICloudDataButton,
-                        role: .destructive
-                    ) {
-                        showDeleteICloudDataConfirmation = true
-                    }
-                    .disabled(!services.isCloudKitEnabled || isDeletingICloudData || isStoppingShare)
-                }
-
-                if !services.isCloudKitEnabled {
-                    Text(strings.iCloudSharingUnavailableLocalBuild)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                if let cloudKitDiagnosticMessage {
-                    Text(cloudKitDiagnosticMessage)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
+                )
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                .listRowBackground(Color.clear)
             }
 
             Section(strings.profileSection) {
@@ -2653,21 +2976,18 @@ struct SettingsTabView: View {
             }
 
             Section(strings.accessRequestSection) {
-                DatePicker(strings.accessRequestStartLabel, selection: $requestStartDate, displayedComponents: .date)
-                DatePicker(strings.accessRequestEndLabel, selection: $requestEndDate, displayedComponents: .date)
-                Button(strings.requestHistoryAccessButton) {
-                    sendAccessRequest()
-                }
-                .disabled(!services.isCloudKitEnabled)
-
                 if !pendingIncomingAccessRequests.isEmpty {
                     Text(strings.pendingAccessRequestsLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(pendingIncomingAccessRequests) { request in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(accessRequestRangeText(for: request))
-                            Text(request.requesterMemberID)
+                            Text(strings.incomingHistoryRequestText(
+                                requester: request.requesterMemberID,
+                                rangeText: accessRequestRangeText(for: request)
+                            ))
+                            .font(.subheadline.weight(.semibold))
+                            Text(strings.prePairingHistoryLabel)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             HStack {
@@ -2706,6 +3026,13 @@ struct SettingsTabView: View {
 
             Section(strings.syncSection) {
                 LabeledContent(strings.lastSyncLabel, value: settings.lastSyncAt?.formatted(date: .abbreviated, time: .shortened) ?? strings.never)
+                Button(
+                    isDeletingICloudData ? strings.deletingICloudDataButton : strings.deleteICloudDataButton,
+                    role: .destructive
+                ) {
+                    showDeleteICloudDataConfirmation = true
+                }
+                .disabled(!services.isCloudKitEnabled || isDeletingICloudData || isStoppingShare)
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
@@ -2716,10 +3043,19 @@ struct SettingsTabView: View {
         .task {
             authorizationState = services.calendarAccess.authorizationState()
             refreshCalendars()
+            ensurePairingDateIfNeeded()
         }
         .sheet(item: $preparedShare) { share in
             CloudSharingController(preparedShare: share) { message in
                 errorMessage = strings.cloudKitShareFailed(message)
+            }
+        }
+        .sheet(item: $activeSettingsSheet) { sheet in
+            switch sheet {
+            case .historyRequest:
+                HistoryRequestSheet(pairingDate: settings.pairingDate ?? PairingDatePlan.normalizedPairingDate(.now)) { startDate, endDate in
+                    sendAccessRequest(startDate: startDate, endDate: endDate)
+                }
             }
         }
         .alert(strings.unpairConfirmationTitle, isPresented: $showStopSharingConfirmation) {
@@ -2826,28 +3162,44 @@ struct SettingsTabView: View {
         }
     }
 
-    private func sendAccessRequest() {
+    private func ensurePairingDateIfNeeded() {
+        guard pairingStatus != .notPaired else { return }
+        settings.markPairingDateIfNeeded()
+    }
+
+    @discardableResult
+    private func sendAccessRequest(startDate: Date, endDate: Date) -> Bool {
         errorMessage = nil
         accessRequestMessage = nil
 
-        guard requestEndDate > requestStartDate else {
+        let calendar = Calendar.current
+        let normalizedStartDate = calendar.startOfDay(for: startDate)
+        let normalizedDisplayedEndDate = calendar.startOfDay(for: endDate)
+        let exclusiveEndDate = PairingDatePlan.exclusiveEndDate(
+            forDisplayedEndDate: normalizedDisplayedEndDate,
+            calendar: calendar
+        )
+
+        guard exclusiveEndDate > normalizedStartDate else {
             accessRequestMessage = settings.strings.invalidAccessRequestRangeMessage
-            return
+            return false
         }
 
         let request = CalendarAccessRequest(
             requesterMemberID: settings.currentMemberID,
             ownerMemberID: settings.partnerMemberID,
-            requestedStartDate: requestStartDate,
-            requestedEndDate: requestEndDate
+            requestedStartDate: normalizedStartDate,
+            requestedEndDate: exclusiveEndDate
         )
         modelContext.insert(request)
         do {
             try modelContext.save()
             accessRequestMessage = settings.strings.accessRequestSentMessage
             saveAccessRequestToCloudKit(request)
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -2881,7 +3233,8 @@ struct SettingsTabView: View {
 
     private func accessRequestRangeText(for request: CalendarAccessRequest) -> String {
         let start = request.requestedStartDate.formatted(date: .abbreviated, time: .omitted)
-        let end = request.requestedEndDate.formatted(date: .abbreviated, time: .omitted)
+        let displayedEndDate = PairingDatePlan.displayedEndDate(forExclusiveEndDate: request.requestedEndDate)
+        let end = displayedEndDate.formatted(date: .abbreviated, time: .omitted)
         return "\(start) - \(end)"
     }
 
@@ -2913,6 +3266,7 @@ struct SettingsTabView: View {
             guard activeSharePreparationID == preparationID else { return }
             settings.iCloudSharingEnabled = true
             settings.hasStartedPairing = true
+            settings.markPairingDateIfNeeded()
             settings.outgoingShareParticipantIDs = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentifiers(
                 from: share.share
             )
@@ -2951,6 +3305,7 @@ struct SettingsTabView: View {
             settings.hasStartedPairing = false
             settings.partnerShareOwnerID = nil
             settings.outgoingShareParticipantIDs = []
+            settings.clearPairingDate()
             errorMessage = settings.strings.unpairSucceeded
         } catch {
             errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
@@ -2977,6 +3332,7 @@ struct SettingsTabView: View {
             settings.hasStartedPairing = false
             settings.partnerShareOwnerID = nil
             settings.outgoingShareParticipantIDs = []
+            settings.clearPairingDate()
             settings.lastSyncAt = nil
             settings.lastSyncError = nil
             settings.syncPhase = .idle

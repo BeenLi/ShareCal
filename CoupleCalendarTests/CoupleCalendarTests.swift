@@ -215,48 +215,48 @@ final class EventMirrorServiceTests: XCTestCase {
     }
 
     func testFiltersMirrorsAndShadowsToAllowedSharingWindows() {
-        let now = Date(timeIntervalSince1970: 100_000)
-        let window = CalendarSharingWindowPlan.defaultWindows(now: now)[0]
-        let oldEvent = calendarEvent(id: "old", startDate: now.addingTimeInterval(-4 * 24 * 60 * 60))
-        let recentEvent = calendarEvent(id: "recent", startDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
-        let futureEvent = calendarEvent(id: "future", startDate: now.addingTimeInterval(10 * 24 * 60 * 60))
+        let pairingDate = Date(timeIntervalSince1970: 100_000)
+        let window = CalendarSharingWindowPlan.defaultWindows(now: pairingDate)[0]
+        let oldEvent = calendarEvent(id: "old", startDate: pairingDate.addingTimeInterval(-60))
+        let pairedDayEvent = calendarEvent(id: "paired-day", startDate: pairingDate.addingTimeInterval(60))
+        let futureEvent = calendarEvent(id: "future", startDate: pairingDate.addingTimeInterval(10 * 24 * 60 * 60))
 
         let mirrors = EventMirrorService().makeMirrors(
-            from: [oldEvent, recentEvent, futureEvent],
+            from: [oldEvent, pairedDayEvent, futureEvent],
             selectedCalendarIDs: ["work"],
             ownerMemberID: "me",
             visibility: .fullDetails,
             sharingWindows: [window]
         )
         let shadows = EventMirrorService().makeShadows(
-            from: [oldEvent, recentEvent, futureEvent],
+            from: [oldEvent, pairedDayEvent, futureEvent],
             selectedCalendarIDs: ["work"],
-            uploadedAt: now,
+            uploadedAt: pairingDate,
             sharingWindows: [window]
         )
 
-        XCTAssertEqual(mirrors.map(\.title), ["recent", "future"])
-        XCTAssertEqual(shadows.map(\.localEventIdentifier), ["recent", "future"])
+        XCTAssertEqual(mirrors.map(\.title), ["paired-day", "future"])
+        XCTAssertEqual(shadows.map(\.localEventIdentifier), ["paired-day", "future"])
     }
 
     func testBuildsHardDeleteRecordNamesForOutOfWindowMirrorsWithoutTombstones() {
-        let now = Date(timeIntervalSince1970: 100_000)
-        let allowed = CalendarSharingWindowPlan.defaultWindows(now: now)
+        let pairingDate = Date(timeIntervalSince1970: 100_000)
+        let allowed = CalendarSharingWindowPlan.defaultWindows(now: pairingDate)
         let oldMirror = eventMirror(
             id: "old",
             ownerMemberID: "me",
-            startDate: now.addingTimeInterval(-4 * 24 * 60 * 60),
+            startDate: pairingDate.addingTimeInterval(-60),
             cloudKitRecordName: "old-record"
         )
-        let recentMirror = eventMirror(
-            id: "recent",
+        let pairedDayMirror = eventMirror(
+            id: "paired-day",
             ownerMemberID: "me",
-            startDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
-            cloudKitRecordName: "recent-record"
+            startDate: pairingDate.addingTimeInterval(60),
+            cloudKitRecordName: "paired-day-record"
         )
 
         let stale = EventMirrorService().mirrorsOutsideSharingWindows(
-            [oldMirror, recentMirror],
+            [oldMirror, pairedDayMirror],
             sharingWindows: allowed
         )
 
@@ -313,20 +313,21 @@ final class EventMirrorServiceTests: XCTestCase {
 }
 
 final class CalendarSharingWindowPlanTests: XCTestCase {
-    func testDefaultWindowSharesRollingLastSeventyTwoHoursAndFutureYear() {
-        let now = Date(timeIntervalSince1970: 1_000_000)
+    func testDefaultWindowSharesFromPairingDateToDistantFuture() {
+        let pairingDate = Date(timeIntervalSince1970: 1_000_000)
 
-        let windows = CalendarSharingWindowPlan.defaultWindows(now: now)
+        let windows = CalendarSharingWindowPlan.defaultWindows(now: pairingDate)
 
         XCTAssertEqual(windows.count, 1)
-        XCTAssertEqual(windows[0].start, now.addingTimeInterval(-72 * 60 * 60))
-        XCTAssertEqual(windows[0].end, now.addingTimeInterval(365 * 24 * 60 * 60))
-        XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-73 * 60 * 60), in: windows))
-        XCTAssertTrue(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-71 * 60 * 60), in: windows))
+        XCTAssertEqual(windows[0].start, pairingDate)
+        XCTAssertEqual(windows[0].end, Date.distantFuture)
+        XCTAssertFalse(CalendarSharingWindowPlan.contains(pairingDate.addingTimeInterval(-60), in: windows))
+        XCTAssertTrue(CalendarSharingWindowPlan.contains(pairingDate.addingTimeInterval(60), in: windows))
     }
 
     func testApprovedRequestsExpandEffectiveWindowsForRequestedOwnerOnly() {
         let now = Date(timeIntervalSince1970: 1_000_000)
+        let pairingDate = now.addingTimeInterval(-10 * 24 * 60 * 60)
         let approvedStart = now.addingTimeInterval(-30 * 24 * 60 * 60)
         let approvedEnd = now.addingTimeInterval(-20 * 24 * 60 * 60)
         let approved = CalendarAccessRequest(
@@ -352,7 +353,7 @@ final class CalendarSharingWindowPlanTests: XCTestCase {
         )
 
         let windows = CalendarSharingWindowPlan.effectiveWindows(
-            now: now,
+            now: pairingDate,
             accessRequests: [approved, pending, otherOwner],
             ownerMemberID: "me"
         )
@@ -361,6 +362,7 @@ final class CalendarSharingWindowPlanTests: XCTestCase {
         XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-55 * 24 * 60 * 60), in: windows))
         XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-85 * 24 * 60 * 60), in: windows))
         XCTAssertTrue(CalendarSharingWindowPlan.contains(now.addingTimeInterval(30 * 24 * 60 * 60), in: windows))
+        XCTAssertFalse(CalendarSharingWindowPlan.contains(pairingDate.addingTimeInterval(-60), in: windows))
     }
 
     func testEnclosingIntervalUsesEarliestStartAndLatestEnd() {
@@ -574,6 +576,36 @@ final class PairingSettingsPlanTests: XCTestCase {
             ),
             "partner@example.com"
         )
+    }
+}
+
+final class PairingDatePlanTests: XCTestCase {
+    func testNormalizesPairingDateToStartOfDay() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 8, hour: 19, minute: 30)))
+        let expected = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 8)))
+
+        XCTAssertEqual(PairingDatePlan.normalizedPairingDate(date, calendar: calendar), expected)
+    }
+
+    func testPairingDayCountUsesCalendarDays() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let pairingDate = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 8)))
+        let sameDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 8, hour: 23)))
+        let laterDate = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 11, hour: 1)))
+
+        XCTAssertEqual(PairingDatePlan.dayCount(since: pairingDate, now: sameDay, calendar: calendar), 0)
+        XCTAssertEqual(PairingDatePlan.dayCount(since: pairingDate, now: laterDate, calendar: calendar), 3)
+    }
+
+    func testDefaultHistoryRequestRangeEndsBeforePairingDate() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let pairingDate = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 8)))
+
+        let range = PairingDatePlan.defaultHistoryRequestRange(pairingDate: pairingDate, calendar: calendar)
+
+        XCTAssertEqual(range.start, try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 5, day: 9))))
+        XCTAssertEqual(range.end, try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 7))))
     }
 }
 

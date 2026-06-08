@@ -55,6 +55,9 @@ final class SettingsStore {
     var hasStartedPairing: Bool {
         didSet { defaults.set(hasStartedPairing, forKey: Key.hasStartedPairing) }
     }
+    var pairingDate: Date? {
+        didSet { saveOptionalDate(pairingDate, forKey: Key.pairingDate) }
+    }
     var selectedCalendarIDs: Set<String> {
         didSet { saveSelectedCalendarIDs() }
     }
@@ -80,6 +83,7 @@ final class SettingsStore {
         outgoingShareParticipantIDs = defaults.stringArray(forKey: Key.outgoingShareParticipantIDs) ?? []
         iCloudSharingEnabled = defaults.object(forKey: Key.iCloudSharingEnabled) as? Bool ?? true
         hasStartedPairing = defaults.object(forKey: Key.hasStartedPairing) as? Bool ?? false
+        pairingDate = defaults.object(forKey: Key.pairingDate) as? Date
         selectedCalendarIDs = Set(defaults.stringArray(forKey: Key.selectedCalendarIDs) ?? [])
         defaultVisibility = EventVisibility(rawValue: defaults.string(forKey: Key.defaultVisibility) ?? "") ?? .fullDetails
         appLanguage = AppLanguagePreference.read(from: defaults)
@@ -106,6 +110,23 @@ final class SettingsStore {
         }
     }
 
+    func markPairingDateIfNeeded(at date: Date = .now, calendar: Calendar = .current) {
+        guard pairingDate == nil else { return }
+        pairingDate = PairingDatePlan.normalizedPairingDate(date, calendar: calendar)
+    }
+
+    func clearPairingDate() {
+        pairingDate = nil
+    }
+
+    private func saveOptionalDate(_ value: Date?, forKey key: String) {
+        if let value {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     private enum Key {
         static let currentMemberID = "currentMemberID"
         static let partnerMemberID = "partnerMemberID"
@@ -113,6 +134,7 @@ final class SettingsStore {
         static let outgoingShareParticipantIDs = "outgoingShareParticipantIDs"
         static let iCloudSharingEnabled = "iCloudSharingEnabled"
         static let hasStartedPairing = "hasStartedPairing"
+        static let pairingDate = "pairingDate"
         static let selectedCalendarIDs = "selectedCalendarIDs"
         static let defaultVisibility = "defaultVisibility"
         static let lastSyncAt = "lastSyncAt"
@@ -195,8 +217,12 @@ struct SyncCoordinator {
             timing.mark("calendarSelectionReady selected=\(settings.selectedCalendarIDs.count)")
 
             let localAccessRequests = try modelContext.fetch(FetchDescriptor<CalendarAccessRequest>())
+            if settings.hasStartedPairing || settings.partnerShareOwnerID != nil || !settings.outgoingShareParticipantIDs.isEmpty {
+                settings.markPairingDateIfNeeded(at: syncedAt)
+            }
+            let pairingDate = settings.pairingDate ?? PairingDatePlan.normalizedPairingDate(syncedAt)
             let sharingWindows = CalendarSharingWindowPlan.effectiveWindows(
-                now: syncedAt,
+                now: pairingDate,
                 accessRequests: localAccessRequests,
                 ownerMemberID: settings.currentMemberID
             )
@@ -310,6 +336,7 @@ struct SyncCoordinator {
                 settings.partnerShareOwnerID = partnerShareOwnerID
                 if partnerShareOwnerID != nil || !settings.outgoingShareParticipantIDs.isEmpty {
                     settings.hasStartedPairing = true
+                    settings.markPairingDateIfNeeded(at: syncedAt)
                 }
                 let sharedMirrors = try await cloudKit.fetchSharedEventMirrors()
                 let importableSharedMirrors = CloudKitSharedDatabaseImportPlan.importableMirrors(

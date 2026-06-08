@@ -122,20 +122,33 @@ struct ShareCalStrings {
     var partnerICloudIdentityLabel: String { text("iCloud Identity", "iCloud 身份") }
     var sharingMyCalendarLabel: String { text("Sharing My Calendar", "我共享给对方") }
     var partnersCalendarLabel: String { text("Partner's Calendar", "对方共享给我") }
+    var pairingDayLabel: String { text("Pairing Date", "配对日") }
+    var sharingScopeTitle: String { text("Sharing Scope", "共享范围") }
+    var sharedAfterPairingDateValue: String { text("After pairing date", "配对日之后") }
+    var prePairingHistoryLabel: String { text("Pre-pairing history", "配对前历史") }
+    var requestRequiredValue: String { text("Request required", "需要申请") }
     var noICloudSharingIdentity: String { text("Not connected", "未连接") }
     var pairingDescription: String {
         text(
-            "After pairing, you can share calendars with each other. This version supports one pairing partner.",
-            "配对后，你们可以互相共享日历。当前版本仅支持一位配对对象。"
+            "After pairing, you can share calendars with each other from the pairing date. This version supports one pairing partner.",
+            "配对后，你们可以从配对日开始互相共享日历。当前版本仅支持一位配对对象。"
         )
     }
     var accessRequestSection: String { text("History Requests", "历史日程申请") }
-    var requestHistoryAccessButton: String { text("Request History Access", "申请查看历史日程") }
-    var accessRequestStartLabel: String { text("Start", "开始") }
-    var accessRequestEndLabel: String { text("End", "结束") }
+    var requestHistoryAccessButton: String { text("Request Pre-Pairing History", "申请查看配对前历史") }
+    var prePairingHistoryRequestTitle: String { text("Request Pre-Pairing History", "申请查看配对前历史") }
+    var prePairingHistoryRequestDescription: String {
+        text(
+            "You can currently view schedules after the pairing date. To view earlier schedules, send a request to your partner.",
+            "你当前只能查看配对日之后的日程。如果想查看更早的日程，需要向对方申请。"
+        )
+    }
+    var accessRequestStartLabel: String { text("Start", "开始日期") }
+    var accessRequestEndLabel: String { text("End", "结束日期") }
     var pendingAccessRequestsLabel: String { text("Pending Requests", "待处理申请") }
     var outgoingAccessRequestsLabel: String { text("My Requests", "我的申请") }
     var approveButton: String { text("Approve", "同意") }
+    var sendRequestButton: String { text("Send Request", "发送申请") }
     var accessRequestSentMessage: String { text("Request sent.", "申请已发送。") }
     var accessRequestUpdatedMessage: String { text("Request updated.", "申请已更新。") }
     var invalidAccessRequestRangeMessage: String {
@@ -261,6 +274,43 @@ struct ShareCalStrings {
         case .on: text("On", "已开启")
         case .unavailable: text("Unavailable", "不可用")
         }
+    }
+
+    func pairingDayCountText(_ dayCount: Int) -> String {
+        "D+\(dayCount)"
+    }
+
+    func pairingDateLine(_ dateText: String) -> String {
+        text("Pairing date: \(dateText)", "配对日：\(dateText)")
+    }
+
+    func calendarPairingStatusLine(dayCount: Int, dateText: String) -> String {
+        text(
+            "Paired \(pairingDayCountText(dayCount)) · Shared since \(dateText)",
+            "配对 \(pairingDayCountText(dayCount)) · 共享自 \(dateText)"
+        )
+    }
+
+    func incomingHistoryRequestText(requester: String, rangeText: String) -> String {
+        text(
+            "\(requester) wants to view \(rangeText)",
+            "\(requester) 想查看 \(rangeText)"
+        )
+    }
+
+    func pairingDateText(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = .current
+        formatter.timeZone = .current
+        switch language {
+        case .english:
+            formatter.locale = Locale(identifier: "en_US")
+            formatter.setLocalizedDateFormatFromTemplate("MMM d, yyyy")
+        case .chinese:
+            formatter.locale = Locale(identifier: "zh_Hans")
+            formatter.dateFormat = "yyyy年M月d日"
+        }
+        return formatter.string(from: date)
     }
 
     func invitationStatusTitle(for status: InvitationStatus) -> String {
@@ -646,15 +696,51 @@ enum CalendarAccessRequestStatus: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+struct PairingHistoryRequestRange: Equatable {
+    let start: Date
+    let end: Date
+}
+
+enum PairingDatePlan {
+    static func normalizedPairingDate(_ date: Date, calendar: Calendar = .current) -> Date {
+        calendar.startOfDay(for: date)
+    }
+
+    static func dayCount(since pairingDate: Date, now: Date = .now, calendar: Calendar = .current) -> Int {
+        let start = calendar.startOfDay(for: pairingDate)
+        let end = calendar.startOfDay(for: now)
+        return max(0, calendar.dateComponents([.day], from: start, to: end).day ?? 0)
+    }
+
+    static func defaultHistoryRequestRange(
+        pairingDate: Date,
+        calendar: Calendar = .current
+    ) -> PairingHistoryRequestRange {
+        let normalizedPairingDate = normalizedPairingDate(pairingDate, calendar: calendar)
+        let end = calendar.date(byAdding: .day, value: -1, to: normalizedPairingDate) ?? normalizedPairingDate
+        let start = calendar.date(byAdding: .day, value: -30, to: normalizedPairingDate) ?? end
+        return PairingHistoryRequestRange(start: start, end: end)
+    }
+
+    static func exclusiveEndDate(forDisplayedEndDate displayedEndDate: Date, calendar: Calendar = .current) -> Date {
+        let dayStart = calendar.startOfDay(for: displayedEndDate)
+        return calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+    }
+
+    static func displayedEndDate(forExclusiveEndDate exclusiveEndDate: Date, calendar: Calendar = .current) -> Date {
+        let dayStart = calendar.startOfDay(for: exclusiveEndDate)
+        return calendar.date(byAdding: .day, value: -1, to: dayStart) ?? dayStart
+    }
+}
+
 enum CalendarSharingWindowPlan {
-    static let defaultHistoryDuration: TimeInterval = 72 * 60 * 60
-    static let defaultFutureDuration: TimeInterval = 365 * 24 * 60 * 60
+    static let defaultEndDate = Date.distantFuture
 
     static func defaultWindows(now: Date = .now) -> [DateInterval] {
         [
             DateInterval(
-                start: now.addingTimeInterval(-defaultHistoryDuration),
-                end: now.addingTimeInterval(defaultFutureDuration)
+                start: now,
+                end: defaultEndDate
             )
         ]
     }
