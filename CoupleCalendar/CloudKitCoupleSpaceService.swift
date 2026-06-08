@@ -132,18 +132,36 @@ enum ShareCalCloudKitShareAcceptanceHandler {
     }
 }
 
-final class ShareCalSceneDelegate: NSObject, UIWindowSceneDelegate {
+final class ShareCalSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let cloudKitShareMetadata = connectionOptions.cloudKitShareMetadata else { return }
+        NSLog("ShareCal scene delegate received CloudKit share metadata at connection")
+        ShareCalCloudKitShareAcceptanceHandler.accept(metadata: cloudKitShareMetadata)
+    }
+
     func windowScene(
         _ windowScene: UIWindowScene,
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
+        NSLog("ShareCal scene delegate received CloudKit share metadata")
         ShareCalCloudKitShareAcceptanceHandler.accept(metadata: cloudKitShareMetadata)
     }
 }
 
 enum ShareCalSceneDelegateConfigurationPlan {
+    static let configurationName = "Default Configuration"
+    static let acceptsColdStartShareMetadata = true
+
     static var sceneDelegateClass: AnyClass {
         ShareCalSceneDelegate.self
+    }
+
+    static func sceneDelegateClassName(moduleName: String) -> String {
+        "\(moduleName).ShareCalSceneDelegate"
     }
 }
 
@@ -353,6 +371,135 @@ struct CloudKitSharedReadDiagnostic {
 
 enum CloudKitRecordMappingError: Error {
     case missingField(String)
+}
+
+enum CloudKitBatchUpsertPlan {
+    static func recordIDs(forMirrors mirrors: [EventMirror], zoneID: CKRecordZone.ID) -> [CKRecord.ID] {
+        uniqued(
+            mirrors.map { mirror in
+                CKRecord.ID(recordName: mirror.cloudKitRecordName ?? mirror.mirrorKey, zoneID: zoneID)
+            }
+        )
+    }
+
+    static func recordIDs(forInvitations invitations: [EventInvitation], zoneID: CKRecordZone.ID) -> [CKRecord.ID] {
+        uniqued(
+            invitations.map { invitation in
+                CKRecord.ID(recordName: invitation.cloudKitRecordName ?? invitation.id, zoneID: zoneID)
+            }
+        )
+    }
+
+    static func recordIDs(forAccessRequests requests: [CalendarAccessRequest], zoneID: CKRecordZone.ID) -> [CKRecord.ID] {
+        uniqued(
+            requests.map { request in
+                CKRecord.ID(recordName: request.cloudKitRecordName ?? request.id, zoneID: zoneID)
+            }
+        )
+    }
+
+    static func recordIDs(forComments comments: [EventComment], zoneID: CKRecordZone.ID) -> [CKRecord.ID] {
+        uniqued(
+            comments.map { comment in
+                CKRecord.ID(recordName: comment.cloudKitRecordName ?? comment.id, zoneID: zoneID)
+            }
+        )
+    }
+
+    static func uniquedRecordIDs(_ recordIDs: [CKRecord.ID]) -> [CKRecord.ID] {
+        var seen: Set<CKRecord.ID> = []
+        return recordIDs.filter { seen.insert($0).inserted }
+    }
+
+    private static func uniqued(_ recordIDs: [CKRecord.ID]) -> [CKRecord.ID] {
+        uniquedRecordIDs(recordIDs)
+    }
+}
+
+enum CloudKitForegroundQueryPlan {
+    static func desiredKeys(forRecordType recordType: String) -> [String]? {
+        switch recordType {
+        case EventMirrorRecordMapper.recordType:
+            [
+                EventMirrorRecordMapper.Key.ownerMemberID,
+                EventMirrorRecordMapper.Key.mirrorKey,
+                EventMirrorRecordMapper.Key.sourceCalendarID,
+                EventMirrorRecordMapper.Key.sourceCalendarTitle,
+                EventMirrorRecordMapper.Key.occurrenceStartDate,
+                EventMirrorRecordMapper.Key.startDate,
+                EventMirrorRecordMapper.Key.endDate,
+                EventMirrorRecordMapper.Key.isAllDay,
+                EventMirrorRecordMapper.Key.timeZoneIdentifier,
+                EventMirrorRecordMapper.Key.title,
+                EventMirrorRecordMapper.Key.location,
+                EventMirrorRecordMapper.Key.notes,
+                EventMirrorRecordMapper.Key.urlString,
+                EventMirrorRecordMapper.Key.calendarColorHex,
+                EventMirrorRecordMapper.Key.visibilityRawValue,
+                EventMirrorRecordMapper.Key.deletedAt
+            ]
+        case InvitationRecordMapper.recordType:
+            [
+                InvitationRecordMapper.Key.creatorMemberID,
+                InvitationRecordMapper.Key.inviteeMemberID,
+                InvitationRecordMapper.Key.title,
+                InvitationRecordMapper.Key.startDate,
+                InvitationRecordMapper.Key.endDate,
+                InvitationRecordMapper.Key.isAllDay,
+                InvitationRecordMapper.Key.location,
+                InvitationRecordMapper.Key.notes,
+                InvitationRecordMapper.Key.statusRawValue,
+                InvitationRecordMapper.Key.createdAt,
+                InvitationRecordMapper.Key.updatedAt,
+                InvitationRecordMapper.Key.createdLocalEventID
+            ]
+        case CalendarAccessRequestRecordMapper.recordType:
+            [
+                CalendarAccessRequestRecordMapper.Key.requesterMemberID,
+                CalendarAccessRequestRecordMapper.Key.ownerMemberID,
+                CalendarAccessRequestRecordMapper.Key.requestedStartDate,
+                CalendarAccessRequestRecordMapper.Key.requestedEndDate,
+                CalendarAccessRequestRecordMapper.Key.statusRawValue,
+                CalendarAccessRequestRecordMapper.Key.createdAt,
+                CalendarAccessRequestRecordMapper.Key.updatedAt
+            ]
+        case CommentRecordMapper.recordType:
+            [
+                CommentRecordMapper.Key.eventMirrorID,
+                CommentRecordMapper.Key.authorMemberID,
+                CommentRecordMapper.Key.body,
+                CommentRecordMapper.Key.createdAt,
+                CommentRecordMapper.Key.editedAt,
+                CommentRecordMapper.Key.deletedAt,
+                CommentRecordMapper.Key.isRead
+            ]
+        default:
+            nil
+        }
+    }
+}
+
+enum CloudKitRecordQueryFailurePlan {
+    static func canTreatMissingRecordTypeAsEmpty(recordType: String, error: Error) -> Bool {
+        recordType == CalendarAccessRequestRecordMapper.recordType && isMissingRecordType(error)
+    }
+
+    static func isMissingRecordType(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == CKError.errorDomain,
+              CKError.Code(rawValue: nsError.code) == .unknownItem else {
+            return false
+        }
+
+        let description = [
+            nsError.localizedDescription,
+            nsError.userInfo["ServerErrorDescription"] as? String,
+            nsError.userInfo[NSDebugDescriptionErrorKey] as? String
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        return description.localizedCaseInsensitiveContains("Did not find record type")
+    }
 }
 
 enum EventMirrorRecordMapper {
@@ -1437,6 +1584,44 @@ final class CloudKitCoupleSpaceService {
         }
     }
 
+    private func fetchRecordsForUpsertIfPresent(
+        with recordIDs: [CKRecord.ID],
+        database: CKDatabase? = nil
+    ) async throws -> [CKRecord.ID: CKRecord] {
+        let uniqueRecordIDs = CloudKitBatchUpsertPlan.uniquedRecordIDs(recordIDs)
+        guard !uniqueRecordIDs.isEmpty else { return [:] }
+
+        do {
+            let targetDatabase = database ?? privateDatabase
+            let results = try await withCheckedThrowingContinuation { continuation in
+                targetDatabase.fetch(withRecordIDs: uniqueRecordIDs) { result in
+                    continuation.resume(with: result)
+                }
+            }
+
+            var recordsByID: [CKRecord.ID: CKRecord] = [:]
+            for (recordID, recordResult) in results {
+                switch recordResult {
+                case .success(let record):
+                    recordsByID[recordID] = record
+                case .failure(let error):
+                    let nsError = error as NSError
+                    if nsError.domain == CKError.errorDomain,
+                       CKError.Code(rawValue: nsError.code) == .unknownItem {
+                        cloudKitSharingInfo("batch upsert lookup found no existing record=\(recordID.recordName)")
+                    } else {
+                        throw error
+                    }
+                }
+            }
+            cloudKitSharingInfo("batch upsert lookup fetched existing=\(recordsByID.count) requested=\(uniqueRecordIDs.count)")
+            return recordsByID
+        } catch {
+            cloudKitSharingError("batch upsert lookup failed requested=\(uniqueRecordIDs.count) error=\(describeCloudKitFailure(error))")
+            throw error
+        }
+    }
+
     private func fetchRecord(
         with recordID: CKRecord.ID,
         database: CKDatabase? = nil
@@ -1474,17 +1659,19 @@ final class CloudKitCoupleSpaceService {
         }
 
         let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
+        let existingRecordsByID = try await fetchRecordsForUpsertIfPresent(
+            with: CloudKitBatchUpsertPlan.recordIDs(forMirrors: mirrors, zoneID: zoneID)
+        )
         var records: [CKRecord] = []
         for mirror in mirrors {
             let recordName = mirror.cloudKitRecordName ?? mirror.mirrorKey
             let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
-            let existingRecord = try await fetchRecordForUpsertIfPresent(with: recordID)
             records.append(
                 EventMirrorRecordMapper.record(
                     from: mirror,
                     zoneID: zoneID,
                     parentRecordID: parentRecordID,
-                    existingRecord: existingRecord
+                    existingRecord: existingRecordsByID[recordID]
                 )
             )
         }
@@ -1599,17 +1786,20 @@ final class CloudKitCoupleSpaceService {
         }
 
         let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: targetZoneID)
+        let existingRecordsByID = try await fetchRecordsForUpsertIfPresent(
+            with: CloudKitBatchUpsertPlan.recordIDs(forInvitations: invitations, zoneID: targetZoneID),
+            database: database
+        )
         var records: [CKRecord] = []
         for invitation in invitations {
             let recordName = invitation.cloudKitRecordName ?? invitation.id
             let recordID = CKRecord.ID(recordName: recordName, zoneID: targetZoneID)
-            let existingRecord = try await fetchRecordForUpsertIfPresent(with: recordID, database: database)
             records.append(
                 InvitationRecordMapper.record(
                     from: invitation,
                     zoneID: targetZoneID,
                     parentRecordID: parentRecordID,
-                    existingRecord: existingRecord
+                    existingRecord: existingRecordsByID[recordID]
                 )
             )
         }
@@ -1639,17 +1829,20 @@ final class CloudKitCoupleSpaceService {
         }
 
         let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: targetZoneID)
+        let existingRecordsByID = try await fetchRecordsForUpsertIfPresent(
+            with: CloudKitBatchUpsertPlan.recordIDs(forAccessRequests: requests, zoneID: targetZoneID),
+            database: database
+        )
         var records: [CKRecord] = []
         for request in requests {
             let recordName = request.cloudKitRecordName ?? request.id
             let recordID = CKRecord.ID(recordName: recordName, zoneID: targetZoneID)
-            let existingRecord = try await fetchRecordForUpsertIfPresent(with: recordID, database: database)
             records.append(
                 CalendarAccessRequestRecordMapper.record(
                     from: request,
                     zoneID: targetZoneID,
                     parentRecordID: parentRecordID,
-                    existingRecord: existingRecord
+                    existingRecord: existingRecordsByID[recordID]
                 )
             )
         }
@@ -1679,17 +1872,20 @@ final class CloudKitCoupleSpaceService {
         }
 
         let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: targetZoneID)
+        let existingRecordsByID = try await fetchRecordsForUpsertIfPresent(
+            with: CloudKitBatchUpsertPlan.recordIDs(forComments: comments, zoneID: targetZoneID),
+            database: database
+        )
         var records: [CKRecord] = []
         for comment in comments {
             let recordName = comment.cloudKitRecordName ?? comment.id
             let recordID = CKRecord.ID(recordName: recordName, zoneID: targetZoneID)
-            let existingRecord = try await fetchRecordForUpsertIfPresent(with: recordID, database: database)
             records.append(
                 CommentRecordMapper.record(
                     from: comment,
                     zoneID: targetZoneID,
                     parentRecordID: parentRecordID,
-                    existingRecord: existingRecord
+                    existingRecord: existingRecordsByID[recordID]
                 )
             )
         }
@@ -1731,17 +1927,23 @@ final class CloudKitCoupleSpaceService {
     }
 
     func fetchSharedEventMirrors() async throws -> [EventMirror] {
-        let zoneIDs = try await sharedCoupleSpaceZoneIDs()
-        guard !zoneIDs.isEmpty else {
+        let sharedZoneIDs = try await fetchSharedCoupleSpaceZoneIDs()
+        return try await fetchSharedEventMirrors(sharedZoneIDs: sharedZoneIDs)
+    }
+
+    func fetchSharedEventMirrors(sharedZoneIDs: [CKRecordZone.ID]) async throws -> [EventMirror] {
+        guard !sharedZoneIDs.isEmpty else {
             cloudKitSharingInfo("fetchSharedEventMirrors skipped; no accepted share zones")
             return []
         }
 
-        let query = CKQuery(recordType: EventMirrorRecordMapper.recordType, predicate: NSPredicate(value: true))
         var mirrors: [EventMirror] = []
-        for sharedZoneID in zoneIDs {
-            cloudKitSharingInfo("fetchSharedEventMirrors querying zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
-            let records = try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase)
+        let recordsByZone = try await fetchRecordsByZone(
+            recordType: EventMirrorRecordMapper.recordType,
+            in: sharedZoneIDs,
+            database: sharedDatabase
+        )
+        for (sharedZoneID, records) in recordsByZone {
             let zoneMirrors = try records.map {
                 try EventMirrorRecordMapper.eventMirror(from: $0)
             }
@@ -1756,19 +1958,30 @@ final class CloudKitCoupleSpaceService {
     }
 
     func fetchSharedOwnerIDs() async throws -> [String] {
-        let zoneIDs = try await sharedCoupleSpaceZoneIDs()
-        return zoneIDs.map(\.ownerName).sorted()
+        sharedOwnerIDs(from: try await fetchSharedCoupleSpaceZoneIDs())
+    }
+
+    func sharedOwnerIDs(from zoneIDs: [CKRecordZone.ID]) -> [String] {
+        zoneIDs.map(\.ownerName).sorted()
     }
 
     func fetchEventComments() async throws -> [EventComment] {
-        let query = CKQuery(recordType: CommentRecordMapper.recordType, predicate: NSPredicate(value: true))
-        var records = try await fetchRecords(matching: query, in: zoneID, database: privateDatabase)
+        let sharedZoneIDs = try await fetchSharedCoupleSpaceZoneIDs()
+        return try await fetchEventComments(sharedZoneIDs: sharedZoneIDs)
+    }
 
-        let sharedZoneIDs = try await sharedCoupleSpaceZoneIDs()
-        for sharedZoneID in sharedZoneIDs {
-            cloudKitSharingInfo("fetchEventComments querying shared zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
-            records.append(contentsOf: try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase))
-        }
+    func fetchEventComments(sharedZoneIDs: [CKRecordZone.ID]) async throws -> [EventComment] {
+        async let privateRecords = fetchRecords(
+            recordType: CommentRecordMapper.recordType,
+            in: zoneID,
+            database: privateDatabase
+        )
+        async let sharedRecords = fetchRecords(
+            recordType: CommentRecordMapper.recordType,
+            in: sharedZoneIDs,
+            database: sharedDatabase
+        )
+        let records = try await privateRecords + sharedRecords
 
         cloudKitSharingInfo("fetchEventComments fetched records=\(records.count)")
         return try records.map {
@@ -1777,14 +1990,22 @@ final class CloudKitCoupleSpaceService {
     }
 
     func fetchEventInvitations() async throws -> [EventInvitation] {
-        let query = CKQuery(recordType: InvitationRecordMapper.recordType, predicate: NSPredicate(value: true))
-        var records = try await fetchRecords(matching: query, in: zoneID, database: privateDatabase)
+        let sharedZoneIDs = try await fetchSharedCoupleSpaceZoneIDs()
+        return try await fetchEventInvitations(sharedZoneIDs: sharedZoneIDs)
+    }
 
-        let sharedZoneIDs = try await sharedCoupleSpaceZoneIDs()
-        for sharedZoneID in sharedZoneIDs {
-            cloudKitSharingInfo("fetchEventInvitations querying shared zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
-            records.append(contentsOf: try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase))
-        }
+    func fetchEventInvitations(sharedZoneIDs: [CKRecordZone.ID]) async throws -> [EventInvitation] {
+        async let privateRecords = fetchRecords(
+            recordType: InvitationRecordMapper.recordType,
+            in: zoneID,
+            database: privateDatabase
+        )
+        async let sharedRecords = fetchRecords(
+            recordType: InvitationRecordMapper.recordType,
+            in: sharedZoneIDs,
+            database: sharedDatabase
+        )
+        let records = try await privateRecords + sharedRecords
 
         cloudKitSharingInfo("fetchEventInvitations fetched records=\(records.count)")
         return try records.map {
@@ -1793,14 +2014,22 @@ final class CloudKitCoupleSpaceService {
     }
 
     func fetchCalendarAccessRequests() async throws -> [CalendarAccessRequest] {
-        let query = CKQuery(recordType: CalendarAccessRequestRecordMapper.recordType, predicate: NSPredicate(value: true))
-        var records = try await fetchRecords(matching: query, in: zoneID, database: privateDatabase)
+        let sharedZoneIDs = try await fetchSharedCoupleSpaceZoneIDs()
+        return try await fetchCalendarAccessRequests(sharedZoneIDs: sharedZoneIDs)
+    }
 
-        let sharedZoneIDs = try await sharedCoupleSpaceZoneIDs()
-        for sharedZoneID in sharedZoneIDs {
-            cloudKitSharingInfo("fetchCalendarAccessRequests querying shared zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
-            records.append(contentsOf: try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase))
-        }
+    func fetchCalendarAccessRequests(sharedZoneIDs: [CKRecordZone.ID]) async throws -> [CalendarAccessRequest] {
+        async let privateRecords = fetchRecords(
+            recordType: CalendarAccessRequestRecordMapper.recordType,
+            in: zoneID,
+            database: privateDatabase
+        )
+        async let sharedRecords = fetchRecords(
+            recordType: CalendarAccessRequestRecordMapper.recordType,
+            in: sharedZoneIDs,
+            database: sharedDatabase
+        )
+        let records = try await privateRecords + sharedRecords
 
         cloudKitSharingInfo("fetchCalendarAccessRequests fetched records=\(records.count)")
         return try records.map {
@@ -1808,7 +2037,7 @@ final class CloudKitCoupleSpaceService {
         }
     }
 
-    private func sharedCoupleSpaceZoneIDs() async throws -> [CKRecordZone.ID] {
+    func fetchSharedCoupleSpaceZoneIDs() async throws -> [CKRecordZone.ID] {
         let zones = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[CKRecordZone], Error>) in
             sharedDatabase.fetchAllRecordZones { zones, error in
                 if let error {
@@ -1822,6 +2051,10 @@ final class CloudKitCoupleSpaceService {
             from: zones,
             expectedZoneName: Self.zoneName
         )
+    }
+
+    private func sharedCoupleSpaceZoneIDs() async throws -> [CKRecordZone.ID] {
+        try await fetchSharedCoupleSpaceZoneIDs()
     }
 
     private func acceptedSharedZoneID(containingEventRecordName eventRecordName: String) async throws -> CKRecordZone.ID {
@@ -1888,16 +2121,75 @@ final class CloudKitCoupleSpaceService {
     }
 
     private func fetchRecords(
-        matching query: CKQuery,
+        recordType: String,
         in zoneID: CKRecordZone.ID,
         database: CKDatabase
+    ) async throws -> [CKRecord] {
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        return try await fetchRecords(
+            matching: query,
+            in: zoneID,
+            database: database,
+            desiredKeys: CloudKitForegroundQueryPlan.desiredKeys(forRecordType: recordType)
+        )
+    }
+
+    private func fetchRecords(
+        recordType: String,
+        in zoneIDs: [CKRecordZone.ID],
+        database: CKDatabase
+    ) async throws -> [CKRecord] {
+        let recordsByZone = try await fetchRecordsByZone(recordType: recordType, in: zoneIDs, database: database)
+        return recordsByZone.flatMap(\.records)
+    }
+
+    private func fetchRecordsByZone(
+        recordType: String,
+        in zoneIDs: [CKRecordZone.ID],
+        database: CKDatabase
+    ) async throws -> [(zoneID: CKRecordZone.ID, records: [CKRecord])] {
+        guard !zoneIDs.isEmpty else { return [] }
+
+        return try await withThrowingTaskGroup(of: (CKRecordZone.ID, [CKRecord]).self) { group in
+            for zoneID in zoneIDs {
+                group.addTask {
+                    let records = try await self.fetchRecords(
+                        recordType: recordType,
+                        in: zoneID,
+                        database: database
+                    )
+                    return (zoneID, records)
+                }
+            }
+
+            var recordsByZone: [(zoneID: CKRecordZone.ID, records: [CKRecord])] = []
+            for try await zoneRecords in group {
+                recordsByZone.append(zoneRecords)
+            }
+            return recordsByZone.sorted { lhs, rhs in
+                if lhs.zoneID.ownerName == rhs.zoneID.ownerName {
+                    return lhs.zoneID.zoneName < rhs.zoneID.zoneName
+                }
+                return lhs.zoneID.ownerName < rhs.zoneID.ownerName
+            }
+        }
+    }
+
+    private func fetchRecords(
+        matching query: CKQuery,
+        in zoneID: CKRecordZone.ID,
+        database: CKDatabase,
+        desiredKeys: [String]? = nil
     ) async throws -> [CKRecord] {
         try await withCheckedThrowingContinuation { continuation in
             let recordsLock = NSLock()
             var fetchedRecords: [CKRecord] = []
+            var pageCount = 0
+            let startedAt = Date()
 
             func add(_ operation: CKQueryOperation) {
                 operation.zoneID = zoneID
+                operation.desiredKeys = desiredKeys
                 operation.recordMatchedBlock = { _, recordResult in
                     guard case .success(let record) = recordResult else { return }
                     recordsLock.withLock {
@@ -1905,15 +2197,41 @@ final class CloudKitCoupleSpaceService {
                     }
                 }
                 operation.queryResultBlock = { result in
+                    pageCount += 1
                     switch result {
                     case .success(let cursor):
                         if let cursor {
                             add(CKQueryOperation(cursor: cursor))
                         } else {
                             let records = recordsLock.withLock { fetchedRecords }
+                            cloudKitSharingInfo(
+                                String(
+                                    format: "fetchRecords recordType=%@ zone=%@ owner=%@ records=%d pages=%d elapsed=%.3fs desiredKeys=%d",
+                                    query.recordType,
+                                    zoneID.zoneName,
+                                    zoneID.ownerName,
+                                    records.count,
+                                    pageCount,
+                                    Date().timeIntervalSince(startedAt),
+                                    desiredKeys?.count ?? 0
+                                )
+                            )
                             continuation.resume(returning: records)
                         }
                     case .failure(let error):
+                        if CloudKitRecordQueryFailurePlan.canTreatMissingRecordTypeAsEmpty(
+                            recordType: query.recordType,
+                            error: error
+                        ) {
+                            cloudKitSharingError(
+                                "fetchRecords missing optional recordType=\(query.recordType) zone=\(zoneID.zoneName) owner=\(zoneID.ownerName); treating as empty"
+                            )
+                            continuation.resume(returning: [])
+                            return
+                        }
+                        cloudKitSharingError(
+                            "fetchRecords failed recordType=\(query.recordType) zone=\(zoneID.zoneName) owner=\(zoneID.ownerName) error=\(describeCloudKitFailure(error))"
+                        )
                         continuation.resume(throwing: error)
                     }
                 }

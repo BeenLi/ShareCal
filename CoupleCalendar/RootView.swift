@@ -88,6 +88,7 @@ struct RootView: View {
         guard settings.syncPhase != .syncing else { return }
         if consumingAcceptedShareSignal {
             guard ShareCalAcceptedShareSignal.consumePending() else { return }
+            settings.iCloudSharingEnabled = true
         }
 
         isRunningForegroundSync = true
@@ -98,7 +99,11 @@ struct RootView: View {
             eventMirrorService: services.eventMirrorService,
             cloudKit: services.cloudKitIfAvailable
         )
-        await coordinator.foregroundSync(modelContext: modelContext, settings: settings)
+        await coordinator.foregroundSync(
+            modelContext: modelContext,
+            settings: settings,
+            forceCloudKit: consumingAcceptedShareSignal
+        )
     }
 }
 

@@ -917,6 +917,28 @@ enum ForegroundSyncPlan {
     }
 }
 
+enum CloudKitForegroundSyncPlan {
+    static func shouldRunCloudKit(
+        iCloudSharingEnabled: Bool,
+        hasStartedPairing: Bool,
+        partnerShareOwnerID: String?,
+        outgoingShareParticipantIDs: [String],
+        forceCloudKit: Bool
+    ) -> Bool {
+        guard iCloudSharingEnabled else { return false }
+        if forceCloudKit { return true }
+        if hasStartedPairing { return true }
+        if normalizedID(partnerShareOwnerID) != nil { return true }
+        return outgoingShareParticipantIDs.contains { normalizedID($0) != nil }
+    }
+
+    private static func normalizedID(_ id: String?) -> String? {
+        guard let id else { return nil }
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedID.isEmpty ? nil : trimmedID
+    }
+}
+
 struct CalendarDescriptor: Identifiable, Hashable {
     let id: String
     let title: String

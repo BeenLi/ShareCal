@@ -10,7 +10,7 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(
-            name: nil,
+            name: ShareCalSceneDelegateConfigurationPlan.configurationName,
             sessionRole: connectingSceneSession.role
         )
         configuration.delegateClass = ShareCalSceneDelegateConfigurationPlan.sceneDelegateClass

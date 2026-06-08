@@ -199,7 +199,11 @@ struct SyncCoordinator {
     let eventMirrorService: EventMirrorService
     let cloudKit: CloudKitCoupleSpaceService?
 
-    func foregroundSync(modelContext: ModelContext, settings: SettingsStore) async {
+    func foregroundSync(
+        modelContext: ModelContext,
+        settings: SettingsStore,
+        forceCloudKit: Bool = false
+    ) async {
         settings.syncPhase = .syncing
         settings.lastSyncError = nil
         var timing = SyncTimingLog()
@@ -310,35 +314,71 @@ struct SyncCoordinator {
             if !canceledInvitations.isEmpty {
                 try modelContext.save()
             }
-            if let cloudKit, settings.iCloudSharingEnabled {
-                try await cloudKit.ensureShareRoot(ownerMemberID: settings.currentMemberID)
-                timing.mark("cloudShareRootReady")
-                try await cloudKit.saveMirrorsForSync(mirrorsNeedingCloudUpload)
-                timing.mark("cloudMirrorsSaved count=\(mirrorsNeedingCloudUpload.count)")
-                try await cloudKit.deleteMirrorsForSync(hardDeletedMirrors)
-                timing.mark("cloudHardDeletesSaved count=\(hardDeletedMirrors.count)")
-                for invitation in canceledInvitations {
-                    try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
+            let shouldRunCloudKit = CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: settings.iCloudSharingEnabled,
+                hasStartedPairing: settings.hasStartedPairing,
+                partnerShareOwnerID: settings.partnerShareOwnerID,
+                outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
+                forceCloudKit: forceCloudKit
+            )
+            if shouldRunCloudKit {
+                guard let cloudKit else {
+                    settings.lastSyncError = settings.strings.cloudKitSyncDisabledLocalBuild
+                    try purge(mirrors: hardDeletedMirrors, modelContext: modelContext)
+                    try purgeShadows(mirrorKeys: hardDeletedMirrorKeys, modelContext: modelContext)
+                    settings.lastSyncAt = .now
+                    settings.syncPhase = .idle
+                    timing.mark("finishedWithoutCloudKit")
+                    return
                 }
-                timing.mark("cloudCanceledInvitationsSaved count=\(canceledInvitations.count)")
+
+                let hasCloudWrites = !mirrorsNeedingCloudUpload.isEmpty
+                    || !hardDeletedMirrors.isEmpty
+                    || !canceledInvitations.isEmpty
+                if hasCloudWrites {
+                    try await cloudKit.ensureShareRoot(ownerMemberID: settings.currentMemberID)
+                    timing.mark("cloudShareRootReady")
+                    try await cloudKit.saveMirrorsForSync(mirrorsNeedingCloudUpload)
+                    timing.mark("cloudMirrorsSaved count=\(mirrorsNeedingCloudUpload.count)")
+                    try await cloudKit.deleteMirrorsForSync(hardDeletedMirrors)
+                    timing.mark("cloudHardDeletesSaved count=\(hardDeletedMirrors.count)")
+                    for invitation in canceledInvitations {
+                        try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
+                    }
+                    timing.mark("cloudCanceledInvitationsSaved count=\(canceledInvitations.count)")
+                } else {
+                    timing.mark("cloudWritesSkipped")
+                }
+
                 try await cloudKit.foregroundSync()
                 timing.mark("cloudSyncEngineFinished")
-                settings.outgoingShareParticipantIDs = try await cloudKit.fetchOutgoingShareParticipantIDs(
+                async let outgoingShareParticipantIDs = cloudKit.fetchOutgoingShareParticipantIDs(
                     ownerMemberID: settings.currentMemberID
                 )
+                async let sharedZoneIDs = cloudKit.fetchSharedCoupleSpaceZoneIDs()
+                let fetchedOutgoingShareParticipantIDs = try await outgoingShareParticipantIDs
+                settings.outgoingShareParticipantIDs = fetchedOutgoingShareParticipantIDs
                 timing.mark("cloudOutgoingParticipantsFetched count=\(settings.outgoingShareParticipantIDs.count)")
-                let cloudAccessRequests = try await cloudKit.fetchCalendarAccessRequests()
+                let fetchedSharedZoneIDs = try await sharedZoneIDs
+                timing.mark("cloudSharedZonesFetched count=\(fetchedSharedZoneIDs.count)")
+
+                async let accessRequestsTask = cloudKit.fetchCalendarAccessRequests(sharedZoneIDs: fetchedSharedZoneIDs)
+                async let sharedMirrorsTask = cloudKit.fetchSharedEventMirrors(sharedZoneIDs: fetchedSharedZoneIDs)
+                async let commentsTask = cloudKit.fetchEventComments(sharedZoneIDs: fetchedSharedZoneIDs)
+                async let invitationsTask = cloudKit.fetchEventInvitations(sharedZoneIDs: fetchedSharedZoneIDs)
+
+                let cloudAccessRequests = try await accessRequestsTask
                 try upsert(accessRequests: cloudAccessRequests, modelContext: modelContext)
                 timing.mark("cloudAccessRequestsFetched count=\(cloudAccessRequests.count)")
                 let previousPartnerShareOwnerID = settings.partnerShareOwnerID
-                let sharedOwnerIDs = try await cloudKit.fetchSharedOwnerIDs()
+                let sharedOwnerIDs = cloudKit.sharedOwnerIDs(from: fetchedSharedZoneIDs)
                 let partnerShareOwnerID = sharedOwnerIDs.first
                 settings.partnerShareOwnerID = partnerShareOwnerID
                 if partnerShareOwnerID != nil || !settings.outgoingShareParticipantIDs.isEmpty {
                     settings.hasStartedPairing = true
                     settings.markPairingDateIfNeeded(at: syncedAt)
                 }
-                let sharedMirrors = try await cloudKit.fetchSharedEventMirrors()
+                let sharedMirrors = try await sharedMirrorsTask
                 let importableSharedMirrors = CloudKitSharedDatabaseImportPlan.importableMirrors(
                     sharedMirrors,
                     currentMemberID: settings.currentMemberID
@@ -353,18 +393,18 @@ struct SyncCoordinator {
                     )
                 }
                 try upsert(mirrors: importableSharedMirrors, modelContext: modelContext)
-                let cloudComments = try await cloudKit.fetchEventComments()
+                let cloudComments = try await commentsTask
                 try upsert(comments: cloudComments, modelContext: modelContext)
                 timing.mark("cloudCommentsFetched count=\(cloudComments.count)")
-                let cloudInvitations = try await cloudKit.fetchEventInvitations()
+                let cloudInvitations = try await invitationsTask
                 try upsert(invitations: cloudInvitations, modelContext: modelContext)
                 timing.mark("cloudInvitationsFetched count=\(cloudInvitations.count)")
-            } else if cloudKit == nil {
-                settings.lastSyncError = settings.strings.cloudKitSyncDisabledLocalBuild
-            } else {
+            } else if !settings.iCloudSharingEnabled {
                 settings.partnerShareOwnerID = nil
                 settings.outgoingShareParticipantIDs = []
                 settings.hasStartedPairing = false
+            } else {
+                timing.mark("cloudSyncSkippedUnpaired")
             }
             try purge(mirrors: hardDeletedMirrors, modelContext: modelContext)
             try purgeShadows(mirrorKeys: hardDeletedMirrorKeys, modelContext: modelContext)

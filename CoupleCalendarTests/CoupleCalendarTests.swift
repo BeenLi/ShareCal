@@ -1713,9 +1713,80 @@ final class ForegroundSyncPlanTests: XCTestCase {
     }
 }
 
+final class CloudKitForegroundSyncPlanTests: XCTestCase {
+    func testSkipsCloudKitWhenSharingDisabledEvenIfForced() {
+        XCTAssertFalse(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: false,
+                hasStartedPairing: true,
+                partnerShareOwnerID: "partner-owner",
+                outgoingShareParticipantIDs: ["participant"],
+                forceCloudKit: true
+            )
+        )
+    }
+
+    func testSkipsCloudKitBeforePairingWhenThereIsNoAcceptedShareSignal() {
+        XCTAssertFalse(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: true,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                forceCloudKit: false
+            )
+        )
+    }
+
+    func testRunsCloudKitForPairingSignalsOrAcceptedShareSignal() {
+        XCTAssertTrue(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: true,
+                hasStartedPairing: true,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                forceCloudKit: false
+            )
+        )
+        XCTAssertTrue(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: true,
+                hasStartedPairing: false,
+                partnerShareOwnerID: "partner-owner",
+                outgoingShareParticipantIDs: [],
+                forceCloudKit: false
+            )
+        )
+        XCTAssertTrue(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: true,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: ["participant"],
+                forceCloudKit: false
+            )
+        )
+        XCTAssertTrue(
+            CloudKitForegroundSyncPlan.shouldRunCloudKit(
+                iCloudSharingEnabled: true,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                forceCloudKit: true
+            )
+        )
+    }
+}
+
 final class ShareCalSceneDelegateConfigurationTests: XCTestCase {
     func testAppDelegateUsesSceneDelegateForCloudKitShareAcceptance() {
+        XCTAssertEqual(ShareCalSceneDelegateConfigurationPlan.configurationName, "Default Configuration")
+        XCTAssertTrue(ShareCalSceneDelegateConfigurationPlan.acceptsColdStartShareMetadata)
         XCTAssertTrue(ShareCalSceneDelegateConfigurationPlan.sceneDelegateClass === ShareCalSceneDelegate.self)
+        XCTAssertEqual(
+            ShareCalSceneDelegateConfigurationPlan.sceneDelegateClassName(moduleName: "CoupleCalendar"),
+            "CoupleCalendar.ShareCalSceneDelegate"
+        )
     }
 }
 
@@ -2262,6 +2333,112 @@ final class CloudKitMirrorSyncPlanTests: XCTestCase {
             cloudKitRecordName: "work:\(id):1800",
             lastUploadedAt: Date(timeIntervalSince1970: 2_000),
             isTombstone: isTombstone
+        )
+    }
+}
+
+final class CloudKitBatchUpsertPlanTests: XCTestCase {
+    func testBuildsMirrorRecordIDsWithServerRecordNameFallback() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpaceZone", ownerName: CKCurrentUserDefaultName)
+        let existing = eventMirror(id: "event-1", cloudKitRecordName: "server-record")
+        let new = eventMirror(id: "event-2", cloudKitRecordName: nil)
+
+        let recordIDs = CloudKitBatchUpsertPlan.recordIDs(forMirrors: [existing, new], zoneID: zoneID)
+
+        XCTAssertEqual(recordIDs.map(\.recordName), ["server-record", "work:event-2:1800"])
+    }
+
+    func testDefinesMinimalDesiredKeysForEachForegroundQueryType() {
+        XCTAssertEqual(
+            CloudKitForegroundQueryPlan.desiredKeys(forRecordType: EventMirrorRecordMapper.recordType),
+            [
+                EventMirrorRecordMapper.Key.ownerMemberID,
+                EventMirrorRecordMapper.Key.mirrorKey,
+                EventMirrorRecordMapper.Key.sourceCalendarID,
+                EventMirrorRecordMapper.Key.sourceCalendarTitle,
+                EventMirrorRecordMapper.Key.occurrenceStartDate,
+                EventMirrorRecordMapper.Key.startDate,
+                EventMirrorRecordMapper.Key.endDate,
+                EventMirrorRecordMapper.Key.isAllDay,
+                EventMirrorRecordMapper.Key.timeZoneIdentifier,
+                EventMirrorRecordMapper.Key.title,
+                EventMirrorRecordMapper.Key.location,
+                EventMirrorRecordMapper.Key.notes,
+                EventMirrorRecordMapper.Key.urlString,
+                EventMirrorRecordMapper.Key.calendarColorHex,
+                EventMirrorRecordMapper.Key.visibilityRawValue,
+                EventMirrorRecordMapper.Key.deletedAt
+            ]
+        )
+        XCTAssertEqual(
+            CloudKitForegroundQueryPlan.desiredKeys(forRecordType: CommentRecordMapper.recordType),
+            [
+                CommentRecordMapper.Key.eventMirrorID,
+                CommentRecordMapper.Key.authorMemberID,
+                CommentRecordMapper.Key.body,
+                CommentRecordMapper.Key.createdAt,
+                CommentRecordMapper.Key.editedAt,
+                CommentRecordMapper.Key.deletedAt,
+                CommentRecordMapper.Key.isRead
+            ]
+        )
+    }
+
+    private func eventMirror(
+        id: String,
+        cloudKitRecordName: String?
+    ) -> EventMirror {
+        EventMirror(
+            id: "work:\(id):1800",
+            ownerMemberID: "me",
+            mirrorKey: "work:\(id):1800",
+            sourceCalendarID: "work",
+            sourceCalendarTitle: "Work",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_800),
+            startDate: Date(timeIntervalSince1970: 1_800),
+            endDate: Date(timeIntervalSince1970: 3_600),
+            isAllDay: false,
+            timeZoneIdentifier: "UTC",
+            title: "Planning",
+            location: nil,
+            notes: nil,
+            urlString: nil,
+            calendarColorHex: "#4285F4",
+            visibilityRawValue: EventVisibility.fullDetails.rawValue,
+            deletedAt: nil,
+            cloudKitRecordName: cloudKitRecordName
+        )
+    }
+}
+
+final class CloudKitRecordQueryFailurePlanTests: XCTestCase {
+    func testTreatsMissingCalendarAccessRequestRecordTypeAsEmpty() {
+        let error = NSError(
+            domain: CKError.errorDomain,
+            code: CKError.Code.unknownItem.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "Did not find record type: CalendarAccessRequest"]
+        )
+
+        XCTAssertTrue(
+            CloudKitRecordQueryFailurePlan.canTreatMissingRecordTypeAsEmpty(
+                recordType: CalendarAccessRequestRecordMapper.recordType,
+                error: error
+            )
+        )
+    }
+
+    func testDoesNotTreatCoreRecordTypesAsOptionalWhenSchemaIsMissing() {
+        let error = NSError(
+            domain: CKError.errorDomain,
+            code: CKError.Code.unknownItem.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "Did not find record type: EventMirror"]
+        )
+
+        XCTAssertFalse(
+            CloudKitRecordQueryFailurePlan.canTreatMissingRecordTypeAsEmpty(
+                recordType: EventMirrorRecordMapper.recordType,
+                error: error
+            )
         )
     }
 }
