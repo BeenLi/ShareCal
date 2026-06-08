@@ -208,13 +208,17 @@ struct CalendarTabView: View {
                     case .day:
                         DayAlignedTimelineView(
                             dayStart: selectedDayStart,
-                            myTitle: strings.meTitle,
-                            mySubtitle: settings.currentMemberID,
+                            myTitle: strings.memberColumnTitle(
+                                baseTitle: strings.meTitle,
+                                nickname: settings.currentMemberID
+                            ),
                             myEvents: myEvents,
                             jointEvents: visibleJointEvents,
                             focusedJointEventID: focusedJointEventID,
-                            partnerTitle: strings.partnerTitle,
-                            partnerSubtitle: settings.partnerMemberID,
+                            partnerTitle: strings.memberColumnTitle(
+                                baseTitle: strings.partnerTitle,
+                                nickname: settings.partnerMemberID
+                            ),
                             partnerEvents: partnerEvents,
                             availableWidth: proxy.size.width,
                             onSelect: { selectedEvent = $0 }
@@ -917,12 +921,10 @@ struct DayAlignedTimelineView: View {
     @Environment(SettingsStore.self) private var settings
     let dayStart: Date
     let myTitle: String
-    let mySubtitle: String
     let myEvents: [EventMirror]
     let jointEvents: [JointScheduleEvent]
     let focusedJointEventID: String?
     let partnerTitle: String
-    let partnerSubtitle: String
     let partnerEvents: [EventMirror]
     let availableWidth: CGFloat
     let onSelect: (EventMirror) -> Void
@@ -954,10 +956,8 @@ struct DayAlignedTimelineView: View {
                 laneSpacing: laneSpacing,
                 laneWidth: laneWidth,
                 myTitle: myTitle,
-                mySubtitle: mySubtitle,
                 myCount: myEvents.count,
                 partnerTitle: partnerTitle,
-                partnerSubtitle: partnerSubtitle,
                 partnerCount: partnerEvents.count
             )
             .padding(.horizontal, horizontalPadding)
@@ -1123,10 +1123,8 @@ struct DayTimelineHeader: View {
     let laneSpacing: CGFloat
     let laneWidth: CGFloat
     let myTitle: String
-    let mySubtitle: String
     let myCount: Int
     let partnerTitle: String
-    let partnerSubtitle: String
     let partnerCount: Int
 
     var body: some View {
@@ -1137,7 +1135,6 @@ struct DayTimelineHeader: View {
             HStack(alignment: .top, spacing: laneSpacing) {
                 DayTimelineColumnHeader(
                     title: myTitle,
-                    subtitle: mySubtitle,
                     count: myCount,
                     tint: .blue,
                     width: laneWidth
@@ -1145,7 +1142,6 @@ struct DayTimelineHeader: View {
 
                 DayTimelineColumnHeader(
                     title: partnerTitle,
-                    subtitle: partnerSubtitle,
                     count: partnerCount,
                     tint: .pink,
                     width: laneWidth
@@ -1157,7 +1153,6 @@ struct DayTimelineHeader: View {
 
 struct DayTimelineColumnHeader: View {
     let title: String
-    let subtitle: String
     let count: Int
     let tint: Color
     let width: CGFloat
@@ -1167,10 +1162,8 @@ struct DayTimelineColumnHeader: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
             Spacer(minLength: 4)
             Text("\(count)")
@@ -2441,16 +2434,33 @@ struct SettingsTabView: View {
         }
     }
 
-    private var outgoingSharingIdentityValue: String {
-        ICloudSharingIdentityDisplayPlan.displayValue(
-            for: settings.outgoingShareParticipantIDs,
-            emptyValue: settings.strings.noICloudSharingIdentity
+    private var pairingStatus: PairingStatus {
+        PairingSettingsPlan.status(
+            hasStartedPairing: settings.hasStartedPairing,
+            outgoingParticipantIDs: settings.outgoingShareParticipantIDs,
+            incomingOwnerID: settings.partnerShareOwnerID
         )
     }
 
-    private var incomingSharingIdentityValue: String {
-        ICloudSharingIdentityDisplayPlan.displayValue(
-            for: settings.partnerShareOwnerID,
+    private var outgoingPairingCalendarStatus: PairingCalendarStatus {
+        PairingSettingsPlan.outgoingStatus(
+            hasStartedPairing: settings.hasStartedPairing,
+            outgoingParticipantIDs: settings.outgoingShareParticipantIDs
+        )
+    }
+
+    private var incomingPairingCalendarStatus: PairingCalendarStatus {
+        let incomingStatus = PairingSettingsPlan.incomingStatus(incomingOwnerID: settings.partnerShareOwnerID)
+        if incomingStatus == .unavailable && outgoingPairingCalendarStatus == .on {
+            return .waitingForPartnerToShare
+        }
+        return incomingStatus
+    }
+
+    private var partnerICloudIdentityValue: String {
+        PairingSettingsPlan.partnerIdentity(
+            incomingOwnerID: settings.partnerShareOwnerID,
+            outgoingParticipantIDs: settings.outgoingShareParticipantIDs,
             emptyValue: settings.strings.noICloudSharingIdentity
         )
     }
@@ -2460,11 +2470,92 @@ struct SettingsTabView: View {
         let strings = settings.strings
 
         List {
-            Section(strings.membersSection) {
-                TextField(strings.myDisplayNamePlaceholder, text: $settings.currentMemberID)
+            Section(strings.pairingSection) {
+                Text(strings.pairingStatusTitle(for: pairingStatus))
+                    .font(.headline)
+
+                if pairingStatus == .notPaired {
+                    Text(strings.pairingDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button(strings.startPairingButton(isPreparing: isPreparingShare)) {
+                        Task { await prepareShare() }
+                    }
+                    .disabled(!services.isCloudKitEnabled || isPreparingShare)
+                    Button(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount)) {
+                        Task { await checkCloudKitStatus() }
+                    }
+                    .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
+                } else {
+                    Text(strings.pairingPartnerLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    LabeledContent(strings.partnerNicknameLabel, value: settings.partnerMemberID)
+                    LabeledContent(strings.partnerICloudIdentityLabel, value: partnerICloudIdentityValue)
+                    LabeledContent(
+                        strings.sharingMyCalendarLabel,
+                        value: strings.pairingCalendarStatusTitle(for: outgoingPairingCalendarStatus)
+                    )
+                    LabeledContent(
+                        strings.partnersCalendarLabel,
+                        value: strings.pairingCalendarStatusTitle(for: incomingPairingCalendarStatus)
+                    )
+                    Button(strings.syncAccessibilityLabel) {
+                        syncNow()
+                    }
+                    .disabled(settings.syncPhase == .syncing)
+                    Button(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount)) {
+                        Task { await checkCloudKitStatus() }
+                    }
+                    .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
+                    Button(strings.unpairButton, role: .destructive) {
+                        showStopSharingConfirmation = true
+                    }
+                    .disabled(!services.isCloudKitEnabled || isStoppingShare || isDeletingICloudData)
+                    Button(
+                        isDeletingICloudData ? strings.deletingICloudDataButton : strings.deleteICloudDataButton,
+                        role: .destructive
+                    ) {
+                        showDeleteICloudDataConfirmation = true
+                    }
+                    .disabled(!services.isCloudKitEnabled || isDeletingICloudData || isStoppingShare)
+                }
+
+                if !services.isCloudKitEnabled {
+                    Text(strings.iCloudSharingUnavailableLocalBuild)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if let cloudKitDiagnosticMessage {
+                    Text(cloudKitDiagnosticMessage)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section(strings.profileSection) {
+                LabeledContent {
+                    TextField(
+                        strings.myDisplayNamePlaceholder,
+                        text: $settings.currentMemberID
+                    )
+                    .multilineTextAlignment(.trailing)
                     .textInputAutocapitalization(.never)
-                TextField(strings.partnerDisplayNamePlaceholder, text: $settings.partnerMemberID)
+                    .accessibilityLabel(strings.myNicknameLabel)
+                } label: {
+                    Text(strings.myNicknameLabel)
+                }
+                LabeledContent {
+                    TextField(
+                        strings.partnerDisplayNamePlaceholder,
+                        text: $settings.partnerMemberID
+                    )
+                    .multilineTextAlignment(.trailing)
                     .textInputAutocapitalization(.never)
+                    .accessibilityLabel(strings.partnerNicknameEditLabel)
+                } label: {
+                    Text(strings.partnerNicknameEditLabel)
+                }
             }
 
             Section(strings.languageSection) {
@@ -2529,43 +2620,6 @@ struct SettingsTabView: View {
                     ForEach(EventVisibility.allCases) { visibility in
                         Text(strings.defaultVisibilityLabel(for: visibility)).tag(visibility)
                     }
-                }
-            }
-
-            Section(strings.iCloudShareSection) {
-                LabeledContent(strings.iCloudOutgoingSharingLabel, value: outgoingSharingIdentityValue)
-                LabeledContent(strings.iCloudIncomingSharingLabel, value: incomingSharingIdentityValue)
-                Button(strings.createOrOpenShareButton(isPreparing: isPreparingShare)) {
-                    Task { await prepareShare() }
-                }
-                .disabled(!services.isCloudKitEnabled || isPreparingShare)
-                Button(strings.checkICloudStatusButton(isChecking: isCheckingCloudKitAccount)) {
-                    Task { await checkCloudKitStatus() }
-                }
-                .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
-                Button(strings.stopICloudSharingButton, role: .destructive) {
-                    showStopSharingConfirmation = true
-                }
-                .disabled(!services.isCloudKitEnabled || isStoppingShare || isDeletingICloudData)
-                Button(
-                    isDeletingICloudData ? strings.deletingICloudDataButton : strings.deleteICloudDataButton,
-                    role: .destructive
-                ) {
-                    showDeleteICloudDataConfirmation = true
-                }
-                .disabled(!services.isCloudKitEnabled || isDeletingICloudData || isStoppingShare)
-                Text(strings.createsICloudShareDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !services.isCloudKitEnabled {
-                    Text(strings.iCloudSharingUnavailableLocalBuild)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                if let cloudKitDiagnosticMessage {
-                    Text(cloudKitDiagnosticMessage)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -2639,13 +2693,13 @@ struct SettingsTabView: View {
                 errorMessage = strings.cloudKitShareFailed(message)
             }
         }
-        .alert(strings.stopICloudSharingConfirmationTitle, isPresented: $showStopSharingConfirmation) {
-            Button(strings.stopICloudSharingButton, role: .destructive) {
+        .alert(strings.unpairConfirmationTitle, isPresented: $showStopSharingConfirmation) {
+            Button(strings.unpairButton, role: .destructive) {
                 Task { await stopSharing() }
             }
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
-            Text(strings.stopICloudSharingConfirmationMessage)
+            Text(strings.unpairConfirmationMessage)
         }
         .alert(strings.deleteICloudDataConfirmationTitle, isPresented: $showDeleteICloudDataConfirmation) {
             Button(strings.deleteICloudDataButton, role: .destructive) {
@@ -2728,6 +2782,18 @@ struct SettingsTabView: View {
         } catch {
             errorMessage = error.localizedDescription
             calendarAccessMessage = settings.strings.shareCalCalendarCreationFailed
+        }
+    }
+
+    private func syncNow() {
+        guard settings.syncPhase != .syncing else { return }
+        Task {
+            let coordinator = SyncCoordinator(
+                calendarAccess: services.calendarAccess,
+                eventMirrorService: services.eventMirrorService,
+                cloudKit: services.cloudKitIfAvailable
+            )
+            await coordinator.foregroundSync(modelContext: modelContext, settings: settings)
         }
     }
 
@@ -2817,6 +2883,7 @@ struct SettingsTabView: View {
             let share = try await cloudKit.prepareShare(ownerMemberID: settings.currentMemberID)
             guard activeSharePreparationID == preparationID else { return }
             settings.iCloudSharingEnabled = true
+            settings.hasStartedPairing = true
             settings.outgoingShareParticipantIDs = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentifiers(
                 from: share.share
             )
@@ -2852,9 +2919,10 @@ struct SettingsTabView: View {
                 modelContext: modelContext
             )
             settings.iCloudSharingEnabled = false
+            settings.hasStartedPairing = false
             settings.partnerShareOwnerID = nil
             settings.outgoingShareParticipantIDs = []
-            errorMessage = settings.strings.stopICloudSharingSucceeded
+            errorMessage = settings.strings.unpairSucceeded
         } catch {
             errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
         }
@@ -2877,6 +2945,7 @@ struct SettingsTabView: View {
             try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
             cloudKitDiagnosticMessage = nil
             settings.iCloudSharingEnabled = false
+            settings.hasStartedPairing = false
             settings.partnerShareOwnerID = nil
             settings.outgoingShareParticipantIDs = []
             settings.lastSyncAt = nil

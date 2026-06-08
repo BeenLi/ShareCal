@@ -19,6 +19,9 @@ final class SettingsStore {
     var iCloudSharingEnabled: Bool {
         didSet { defaults.set(iCloudSharingEnabled, forKey: Key.iCloudSharingEnabled) }
     }
+    var hasStartedPairing: Bool {
+        didSet { defaults.set(hasStartedPairing, forKey: Key.hasStartedPairing) }
+    }
     var selectedCalendarIDs: Set<String> {
         didSet { saveSelectedCalendarIDs() }
     }
@@ -43,6 +46,7 @@ final class SettingsStore {
         partnerShareOwnerID = defaults.string(forKey: Key.partnerShareOwnerID)
         outgoingShareParticipantIDs = defaults.stringArray(forKey: Key.outgoingShareParticipantIDs) ?? []
         iCloudSharingEnabled = defaults.object(forKey: Key.iCloudSharingEnabled) as? Bool ?? true
+        hasStartedPairing = defaults.object(forKey: Key.hasStartedPairing) as? Bool ?? false
         selectedCalendarIDs = Set(defaults.stringArray(forKey: Key.selectedCalendarIDs) ?? [])
         defaultVisibility = EventVisibility(rawValue: defaults.string(forKey: Key.defaultVisibility) ?? "") ?? .fullDetails
         appLanguage = AppLanguagePreference.read(from: defaults)
@@ -75,6 +79,7 @@ final class SettingsStore {
         static let partnerShareOwnerID = "partnerShareOwnerID"
         static let outgoingShareParticipantIDs = "outgoingShareParticipantIDs"
         static let iCloudSharingEnabled = "iCloudSharingEnabled"
+        static let hasStartedPairing = "hasStartedPairing"
         static let selectedCalendarIDs = "selectedCalendarIDs"
         static let defaultVisibility = "defaultVisibility"
         static let lastSyncAt = "lastSyncAt"
@@ -246,6 +251,9 @@ struct SyncCoordinator {
                 let sharedOwnerIDs = try await cloudKit.fetchSharedOwnerIDs()
                 let partnerShareOwnerID = sharedOwnerIDs.first
                 settings.partnerShareOwnerID = partnerShareOwnerID
+                if partnerShareOwnerID != nil || !settings.outgoingShareParticipantIDs.isEmpty {
+                    settings.hasStartedPairing = true
+                }
                 let sharedMirrors = try await cloudKit.fetchSharedEventMirrors()
                 let importableSharedMirrors = CloudKitSharedDatabaseImportPlan.importableMirrors(
                     sharedMirrors,
@@ -269,6 +277,7 @@ struct SyncCoordinator {
             } else {
                 settings.partnerShareOwnerID = nil
                 settings.outgoingShareParticipantIDs = []
+                settings.hasStartedPairing = false
             }
             try purge(mirrors: hardDeletedMirrors, modelContext: modelContext)
             try purgeShadows(mirrorKeys: hardDeletedMirrorKeys, modelContext: modelContext)

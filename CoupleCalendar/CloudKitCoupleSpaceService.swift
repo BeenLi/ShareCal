@@ -829,11 +829,11 @@ enum CloudKitSharingFailureMessage {
         let nsError = error as NSError
         if nsError.domain == CKError.errorDomain,
            CKError.Code(rawValue: nsError.code) == .invalidArguments,
-           nsError.localizedDescription.localizedCaseInsensitiveContains("Cannot create new type") {
+            nsError.localizedDescription.localizedCaseInsensitiveContains("Cannot create new type") {
             if nsError.localizedDescription.localizedCaseInsensitiveContains("cloudkit.share") {
-                return "CloudKit Production schema is missing the CloudKit Sharing system record type. Create one Development share, run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Create or Open Share."
+                return "CloudKit Production schema is missing the CloudKit Sharing system record type. Create one Development share, run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Start Pairing."
             }
-            return "CloudKit Production schema is missing ShareCal record types. Run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Create or Open Share."
+            return "CloudKit Production schema is missing ShareCal record types. Run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Start Pairing."
         }
 
         if nsError.domain == CKError.errorDomain,

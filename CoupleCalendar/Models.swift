@@ -97,9 +97,11 @@ struct ShareCalStrings {
     var noInvitations: String { text("No invitations", "暂无邀请") }
     var acceptButton: String { text("Accept", "接受") }
     var declineButton: String { text("Decline", "拒绝") }
-    var membersSection: String { text("Members", "成员") }
-    var myDisplayNamePlaceholder: String { text("My display name", "我的显示名称") }
-    var partnerDisplayNamePlaceholder: String { text("Partner display name", "对方显示名称") }
+    var profileSection: String { text("Profile", "个人资料") }
+    var myNicknameLabel: String { text("My Nickname", "我的昵称") }
+    var partnerNicknameEditLabel: String { text("Partner Note", "对方备注名") }
+    var myDisplayNamePlaceholder: String { text("My nickname", "我的昵称") }
+    var partnerDisplayNamePlaceholder: String { text("Partner note", "对方备注名") }
     var languageSection: String { text("Language", "语言") }
     var appLanguagePicker: String { text("App language", "应用语言") }
     var calendarAccessSection: String { text("Calendar Access", "日历访问") }
@@ -114,10 +116,19 @@ struct ShareCalStrings {
     var noCalendarsLoaded: String { text("No calendars loaded", "没有已加载的日历") }
     var privacySection: String { text("Privacy", "隐私") }
     var defaultVisibilityPicker: String { text("Default visibility", "默认可见性") }
-    var iCloudShareSection: String { text("iCloud Share", "iCloud 共享") }
-    var iCloudOutgoingSharingLabel: String { text("Sharing With", "我正在共享给") }
-    var iCloudIncomingSharingLabel: String { text("Shared With Me", "共享给我的日历") }
+    var pairingSection: String { text("Pairing", "配对") }
+    var pairingPartnerLabel: String { text("Pairing Partner", "配对对象") }
+    var partnerNicknameLabel: String { text("Nickname", "昵称") }
+    var partnerICloudIdentityLabel: String { text("iCloud Identity", "iCloud 身份") }
+    var sharingMyCalendarLabel: String { text("Sharing My Calendar", "我共享给对方") }
+    var partnersCalendarLabel: String { text("Partner's Calendar", "对方共享给我") }
     var noICloudSharingIdentity: String { text("Not connected", "未连接") }
+    var pairingDescription: String {
+        text(
+            "After pairing, you can share calendars with each other. This version supports one pairing partner.",
+            "配对后，你们可以互相共享日历。当前版本仅支持一位配对对象。"
+        )
+    }
     var accessRequestSection: String { text("History Requests", "历史日程申请") }
     var requestHistoryAccessButton: String { text("Request History Access", "申请查看历史日程") }
     var accessRequestStartLabel: String { text("Start", "开始") }
@@ -130,30 +141,30 @@ struct ShareCalStrings {
     var invalidAccessRequestRangeMessage: String {
         text("End date must be after start date.", "结束日期必须晚于开始日期。")
     }
-    var stopICloudSharingButton: String { text("Stop Sharing", "停止共享") }
-    var stopICloudSharingConfirmationTitle: String { text("Stop iCloud Sharing?", "停止 iCloud 共享？") }
-    var stopICloudSharingConfirmationMessage: String {
+    var unpairButton: String { text("Unpair", "解除配对") }
+    var unpairConfirmationTitle: String { text("Unpair?", "解除配对？") }
+    var unpairConfirmationMessage: String {
         text(
-            "Your partner will no longer be able to read your shared calendar from iCloud.",
-            "对方将无法再通过 iCloud 读取你共享的日历。"
+            "After unpairing, you will no longer be able to view each other's calendars. To pair with someone else, unpair first.",
+            "解除后，你们将不能继续互相查看日历。要和其他人配对，需要先解除当前配对。"
         )
     }
-    var stopICloudSharingSucceeded: String { text("Sharing stopped.", "已停止共享。") }
-    var deleteICloudDataButton: String { text("Delete iCloud Data", "删除 iCloud 数据") }
-    var deletingICloudDataButton: String { text("Deleting iCloud Data...", "正在删除 iCloud 数据...") }
-    var deleteICloudDataConfirmationTitle: String { text("Delete iCloud Data?", "删除 iCloud 数据？") }
+    var unpairSucceeded: String { text("Unpaired.", "已解除配对。") }
+    var deleteICloudDataButton: String { text("Delete My iCloud Data", "删除我的 iCloud 数据") }
+    var deletingICloudDataButton: String { text("Deleting My iCloud Data...", "正在删除我的 iCloud 数据...") }
+    var deleteICloudDataConfirmationTitle: String { text("Delete My iCloud Data?", "删除我的 iCloud 数据？") }
     var deleteICloudDataConfirmationMessage: String {
         text(
-            "This stops sharing, deletes ShareCal's private iCloud data, and cannot be undone.",
-            "这会停止共享并删除 ShareCal 的 iCloud 私有数据，且无法撤销。"
+            "This stops sharing, deletes your ShareCal iCloud data, and clears the local ShareCal cache. It will not delete original events from the system Calendar app.",
+            "这会停止共享、删除你上传到 iCloud 的 ShareCal 数据，并清除本地 ShareCal 缓存。它不会删除系统日历中的原始日程。"
         )
     }
     var deleteICloudDataSucceeded: String { text("iCloud data deleted.", "iCloud 数据已删除。") }
     var createsICloudShareDescription: String {
-        text("Creates an iCloud share for your partner.", "为对方创建 iCloud 共享。")
+        text("Creates a pairing invitation for your partner.", "为对方创建配对邀请。")
     }
     var iCloudSharingUnavailableLocalBuild: String {
-        text("iCloud sharing is unavailable in this local build.", "当前本地构建不可用 iCloud 共享。")
+        text("Pairing is unavailable in this local build.", "当前本地构建不可用配对功能。")
     }
     var syncSection: String { text("Sync", "同步") }
     var lastSyncLabel: String { text("Last sync", "上次同步") }
@@ -197,12 +208,23 @@ struct ShareCalStrings {
         text("Last sync \(dateText)", "上次同步 \(dateText)")
     }
 
-    func createOrOpenShareButton(isPreparing: Bool) -> String {
-        isPreparing ? text("Preparing Share...", "正在准备共享...") : text("Create or Open Share", "创建或打开共享")
+    func startPairingButton(isPreparing: Bool) -> String {
+        isPreparing ? text("Preparing Pairing...", "正在准备配对...") : text("Start Pairing", "发起配对")
     }
 
     func checkICloudStatusButton(isChecking: Bool) -> String {
         isChecking ? text("Checking iCloud Status...", "正在检查 iCloud 状态...") : text("Check iCloud Status", "检查 iCloud 状态")
+    }
+
+    func memberColumnTitle(baseTitle: String, nickname: String) -> String {
+        let trimmedNickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedNickname.isEmpty else { return baseTitle }
+        switch language {
+        case .english:
+            return "\(baseTitle) (\(trimmedNickname))"
+        case .chinese:
+            return "\(baseTitle)（\(trimmedNickname)）"
+        }
     }
 
     func cloudKitShareFailed(_ message: String) -> String {
@@ -219,6 +241,25 @@ struct ShareCalStrings {
         case .titleAndLocation: text("Title + location", "标题和地点")
         case .fullDetails: text("Full details", "完整详情")
         case .hidden: text("Hidden", "隐藏")
+        }
+    }
+
+    func pairingStatusTitle(for status: PairingStatus) -> String {
+        switch status {
+        case .notPaired: text("Not Paired", "未配对")
+        case .waitingForPartner: text("Waiting for Partner", "等待对方接受")
+        case .waitingForPartnerToShare: text("Waiting for Partner to Share", "等待对方共享")
+        case .paired: text("Paired", "已配对")
+        }
+    }
+
+    func pairingCalendarStatusTitle(for status: PairingCalendarStatus) -> String {
+        switch status {
+        case .off: text("Off", "未开启")
+        case .waitingForPartner: text("Waiting for Partner", "等待对方接受")
+        case .waitingForPartnerToShare: text("Waiting for Partner to Share", "等待对方共享")
+        case .on: text("On", "已开启")
+        case .unavailable: text("Unavailable", "不可用")
         }
     }
 
@@ -683,6 +724,78 @@ enum ICloudSharingTeardownPlan {
         }
         ownerIDs.insert("partner")
         return ownerIDs
+    }
+
+    private static func normalizedID(_ id: String?) -> String? {
+        guard let id else { return nil }
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedID.isEmpty ? nil : trimmedID
+    }
+}
+
+enum PairingStatus: Equatable {
+    case notPaired
+    case waitingForPartner
+    case waitingForPartnerToShare
+    case paired
+}
+
+enum PairingCalendarStatus: Equatable {
+    case off
+    case waitingForPartner
+    case waitingForPartnerToShare
+    case on
+    case unavailable
+}
+
+enum PairingSettingsPlan {
+    static func status(
+        hasStartedPairing: Bool,
+        outgoingParticipantIDs: [String],
+        incomingOwnerID: String?
+    ) -> PairingStatus {
+        if normalizedID(incomingOwnerID) != nil {
+            return .paired
+        }
+        if !normalizedIDs(outgoingParticipantIDs).isEmpty {
+            return .waitingForPartnerToShare
+        }
+        if hasStartedPairing {
+            return .waitingForPartner
+        }
+        return .notPaired
+    }
+
+    static func outgoingStatus(
+        hasStartedPairing: Bool,
+        outgoingParticipantIDs: [String]
+    ) -> PairingCalendarStatus {
+        if !normalizedIDs(outgoingParticipantIDs).isEmpty {
+            return .on
+        }
+        return hasStartedPairing ? .waitingForPartner : .off
+    }
+
+    static func incomingStatus(incomingOwnerID: String?) -> PairingCalendarStatus {
+        normalizedID(incomingOwnerID) == nil ? .unavailable : .on
+    }
+
+    static func partnerIdentity(
+        incomingOwnerID: String?,
+        outgoingParticipantIDs: [String],
+        emptyValue: String
+    ) -> String {
+        if let incomingOwnerID = normalizedID(incomingOwnerID) {
+            return incomingOwnerID
+        }
+        return ICloudSharingIdentityDisplayPlan.displayValue(
+            for: outgoingParticipantIDs,
+            emptyValue: emptyValue
+        )
+    }
+
+    private static func normalizedIDs(_ ids: [String]) -> [String] {
+        ids.compactMap(normalizedID)
     }
 
     private static func normalizedID(_ id: String?) -> String? {

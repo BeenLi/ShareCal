@@ -495,6 +495,88 @@ final class ICloudSharingTeardownPlanTests: XCTestCase {
     }
 }
 
+final class PairingSettingsPlanTests: XCTestCase {
+    func testReportsNotPairedWhenNoPairingSignalsExist() {
+        XCTAssertEqual(
+            PairingSettingsPlan.status(
+                hasStartedPairing: false,
+                outgoingParticipantIDs: [],
+                incomingOwnerID: nil
+            ),
+            .notPaired
+        )
+    }
+
+    func testReportsWaitingForPartnerAfterStartingOutgoingShare() {
+        XCTAssertEqual(
+            PairingSettingsPlan.status(
+                hasStartedPairing: true,
+                outgoingParticipantIDs: [],
+                incomingOwnerID: nil
+            ),
+            .waitingForPartner
+        )
+    }
+
+    func testReportsWaitingForPartnerToShareAfterOutgoingShareIsAccepted() {
+        XCTAssertEqual(
+            PairingSettingsPlan.status(
+                hasStartedPairing: true,
+                outgoingParticipantIDs: ["partner@example.com"],
+                incomingOwnerID: nil
+            ),
+            .waitingForPartnerToShare
+        )
+    }
+
+    func testReportsPairedWhenIncomingShareIsAvailable() {
+        XCTAssertEqual(
+            PairingSettingsPlan.status(
+                hasStartedPairing: true,
+                outgoingParticipantIDs: [],
+                incomingOwnerID: "icloud-owner"
+            ),
+            .paired
+        )
+    }
+
+    func testBuildsOutgoingAndIncomingCalendarStatuses() {
+        XCTAssertEqual(
+            PairingSettingsPlan.outgoingStatus(hasStartedPairing: false, outgoingParticipantIDs: []),
+            .off
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.outgoingStatus(hasStartedPairing: true, outgoingParticipantIDs: []),
+            .waitingForPartner
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.outgoingStatus(hasStartedPairing: true, outgoingParticipantIDs: ["icloud-owner"]),
+            .on
+        )
+        XCTAssertEqual(PairingSettingsPlan.incomingStatus(incomingOwnerID: nil), .unavailable)
+        XCTAssertEqual(PairingSettingsPlan.incomingStatus(incomingOwnerID: "icloud-owner"), .on)
+    }
+
+    func testPartnerIdentityPrefersIncomingOwnerThenOutgoingParticipant() {
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerIdentity(
+                incomingOwnerID: " icloud-owner ",
+                outgoingParticipantIDs: ["partner@example.com"],
+                emptyValue: "Not connected"
+            ),
+            "icloud-owner"
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerIdentity(
+                incomingOwnerID: nil,
+                outgoingParticipantIDs: [" partner@example.com "],
+                emptyValue: "Not connected"
+            ),
+            "partner@example.com"
+        )
+    }
+}
+
 final class AppLanguageSettingsTests: XCTestCase {
     func testDefaultsToEnglishWhenNoPreferenceExists() {
         let suiteName = "AppLanguageSettingsTests-\(UUID().uuidString)"
@@ -527,13 +609,27 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.calendarTab, "Calendar")
         XCTAssertEqual(strings.invitesTab, "Invites")
         XCTAssertEqual(strings.settingsTitle, "Settings")
-        XCTAssertEqual(strings.createOrOpenShareButton(isPreparing: false), "Create or Open Share")
+        XCTAssertEqual(strings.profileSection, "Profile")
+        XCTAssertEqual(strings.myNicknameLabel, "My Nickname")
+        XCTAssertEqual(strings.partnerNicknameEditLabel, "Partner Note")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.meTitle, nickname: "partner"), "Me (partner)")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.partnerTitle, nickname: "yoki"), "Partner (yoki)")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.partnerTitle, nickname: " "), "Partner")
+        XCTAssertEqual(strings.pairingSection, "Pairing")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .notPaired), "Not Paired")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .waitingForPartner), "Waiting for Partner")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .waitingForPartnerToShare), "Waiting for Partner to Share")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .paired), "Paired")
+        XCTAssertEqual(strings.pairingPartnerLabel, "Pairing Partner")
+        XCTAssertEqual(strings.partnerNicknameLabel, "Nickname")
+        XCTAssertEqual(strings.partnerICloudIdentityLabel, "iCloud Identity")
+        XCTAssertEqual(strings.sharingMyCalendarLabel, "Sharing My Calendar")
+        XCTAssertEqual(strings.partnersCalendarLabel, "Partner's Calendar")
+        XCTAssertEqual(strings.startPairingButton(isPreparing: false), "Start Pairing")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "Full details")
-        XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "Sharing With")
-        XCTAssertEqual(strings.iCloudIncomingSharingLabel, "Shared With Me")
         XCTAssertEqual(strings.noICloudSharingIdentity, "Not connected")
-        XCTAssertEqual(strings.stopICloudSharingButton, "Stop Sharing")
-        XCTAssertEqual(strings.deleteICloudDataButton, "Delete iCloud Data")
+        XCTAssertEqual(strings.unpairButton, "Unpair")
+        XCTAssertEqual(strings.deleteICloudDataButton, "Delete My iCloud Data")
         XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud data deleted.")
     }
 
@@ -543,13 +639,27 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.calendarTab, "日历")
         XCTAssertEqual(strings.invitesTab, "邀请")
         XCTAssertEqual(strings.settingsTitle, "设置")
-        XCTAssertEqual(strings.createOrOpenShareButton(isPreparing: false), "创建或打开共享")
+        XCTAssertEqual(strings.profileSection, "个人资料")
+        XCTAssertEqual(strings.myNicknameLabel, "我的昵称")
+        XCTAssertEqual(strings.partnerNicknameEditLabel, "对方备注名")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.meTitle, nickname: "partner"), "我（partner）")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.partnerTitle, nickname: "yoki"), "对方（yoki）")
+        XCTAssertEqual(strings.memberColumnTitle(baseTitle: strings.partnerTitle, nickname: " "), "对方")
+        XCTAssertEqual(strings.pairingSection, "配对")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .notPaired), "未配对")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .waitingForPartner), "等待对方接受")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .waitingForPartnerToShare), "等待对方共享")
+        XCTAssertEqual(strings.pairingStatusTitle(for: .paired), "已配对")
+        XCTAssertEqual(strings.pairingPartnerLabel, "配对对象")
+        XCTAssertEqual(strings.partnerNicknameLabel, "昵称")
+        XCTAssertEqual(strings.partnerICloudIdentityLabel, "iCloud 身份")
+        XCTAssertEqual(strings.sharingMyCalendarLabel, "我共享给对方")
+        XCTAssertEqual(strings.partnersCalendarLabel, "对方共享给我")
+        XCTAssertEqual(strings.startPairingButton(isPreparing: false), "发起配对")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "完整详情")
-        XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "我正在共享给")
-        XCTAssertEqual(strings.iCloudIncomingSharingLabel, "共享给我的日历")
         XCTAssertEqual(strings.noICloudSharingIdentity, "未连接")
-        XCTAssertEqual(strings.stopICloudSharingButton, "停止共享")
-        XCTAssertEqual(strings.deleteICloudDataButton, "删除 iCloud 数据")
+        XCTAssertEqual(strings.unpairButton, "解除配对")
+        XCTAssertEqual(strings.deleteICloudDataButton, "删除我的 iCloud 数据")
         XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud 数据已删除。")
     }
 }
@@ -1616,7 +1726,7 @@ final class CloudKitSharingFailureMessageTests: XCTestCase {
 
         XCTAssertEqual(
             CloudKitSharingFailureMessage.userFacingMessage(for: error),
-            "CloudKit Production schema is missing ShareCal record types. Run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Create or Open Share."
+            "CloudKit Production schema is missing ShareCal record types. Run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Start Pairing."
         )
     }
 
@@ -1631,7 +1741,7 @@ final class CloudKitSharingFailureMessageTests: XCTestCase {
 
         XCTAssertEqual(
             CloudKitSharingFailureMessage.userFacingMessage(for: error),
-            "CloudKit Production schema is missing the CloudKit Sharing system record type. Create one Development share, run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Create or Open Share."
+            "CloudKit Production schema is missing the CloudKit Sharing system record type. Create one Development share, run Scripts/import-cloudkit-schema.sh development, deploy schema changes to Production in CloudKit Console, then retry Start Pairing."
         )
     }
 }
