@@ -241,10 +241,32 @@ enum CloudKitInvitationWritePlan {
     }
 }
 
+enum CloudKitAccessRequestWriteDestination: Equatable {
+    case privateOwnerZone
+    case acceptedSharedZone
+}
+
+enum CloudKitAccessRequestWritePlan {
+    static func destination(
+        ownerMemberID: String,
+        currentMemberID: String
+    ) -> CloudKitAccessRequestWriteDestination {
+        ownerMemberID == currentMemberID ? .privateOwnerZone : .acceptedSharedZone
+    }
+}
+
+enum CloudKitStopSharingPlan {
+    static func shareRecordIDToDelete(from rootRecord: CKRecord) -> CKRecord.ID? {
+        rootRecord.share?.recordID
+    }
+}
+
 enum ShareCalLaunchDiagnosticPlan {
     static let cloudKitWriteProbeArgument = "-ShareCalCloudKitWriteProbe"
     static let seedCalendarEventArgument = "-ShareCalSeedCalendarEvent"
     static let seedCalendarEventTitleArgument = "-ShareCalSeedCalendarEventTitle"
+    static let stopSharingProbeArgument = "-ShareCalStopICloudSharing"
+    static let sharedReadProbeArgument = "-ShareCalSharedReadProbe"
     static let cloudKitWriteProbeRecordType = "CoupleSpace"
 
     static func shouldRunCloudKitWriteProbe(arguments: [String]) -> Bool {
@@ -253,6 +275,14 @@ enum ShareCalLaunchDiagnosticPlan {
 
     static func shouldSeedCalendarEvent(arguments: [String]) -> Bool {
         arguments.contains(seedCalendarEventArgument)
+    }
+
+    static func shouldRunStopSharingProbe(arguments: [String]) -> Bool {
+        arguments.contains(stopSharingProbeArgument)
+    }
+
+    static func shouldRunSharedReadProbe(arguments: [String]) -> Bool {
+        arguments.contains(sharedReadProbeArgument)
     }
 
     static func seedCalendarEventTitle(arguments: [String]) -> String? {
@@ -267,6 +297,38 @@ enum ShareCalLaunchDiagnosticPlan {
 
         let title = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         return title.isEmpty ? nil : title
+    }
+}
+
+struct CloudKitSharedReadDiagnostic {
+    let sharedZoneCount: Int
+    let eventMirrorCount: Int
+    let commentCount: Int
+    let invitationCount: Int
+    let accessRequestCount: Int
+    let errorDescription: String?
+
+    var provesNoSharedCalendarReadAccess: Bool {
+        errorDescription == nil
+            && sharedZoneCount == 0
+            && eventMirrorCount == 0
+            && commentCount == 0
+            && invitationCount == 0
+            && accessRequestCount == 0
+    }
+
+    var displayText: String {
+        var lines = [
+            "Shared Zones: \(sharedZoneCount)",
+            "EventMirror: \(eventMirrorCount)",
+            "EventComment: \(commentCount)",
+            "EventInvitation: \(invitationCount)",
+            "CalendarAccessRequest: \(accessRequestCount)"
+        ]
+        if let errorDescription {
+            lines.append("Error: \(errorDescription)")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -427,6 +489,61 @@ enum InvitationRecordMapper {
             createdAt: createdAt,
             updatedAt: updatedAt,
             createdLocalEventID: record[Key.createdLocalEventID] as? String,
+            cloudKitRecordName: record.recordID.recordName
+        )
+    }
+}
+
+enum CalendarAccessRequestRecordMapper {
+    static let recordType = "CalendarAccessRequest"
+
+    enum Key {
+        static let requesterMemberID = "requesterMemberID"
+        static let ownerMemberID = "ownerMemberID"
+        static let requestedStartDate = "requestedStartDate"
+        static let requestedEndDate = "requestedEndDate"
+        static let statusRawValue = "statusRawValue"
+        static let createdAt = "createdAt"
+        static let updatedAt = "updatedAt"
+    }
+
+    static func record(
+        from request: CalendarAccessRequest,
+        zoneID: CKRecordZone.ID,
+        parentRecordID: CKRecord.ID? = nil,
+        existingRecord: CKRecord? = nil
+    ) -> CKRecord {
+        let recordName = request.cloudKitRecordName ?? request.id
+        let record = existingRecord ?? CKRecord(recordType: recordType, recordID: CKRecord.ID(recordName: recordName, zoneID: zoneID))
+        CloudKitShareHierarchyPlan.attach(record, toShareRoot: parentRecordID)
+        record[Key.requesterMemberID] = request.requesterMemberID as CKRecordValue
+        record[Key.ownerMemberID] = request.ownerMemberID as CKRecordValue
+        record[Key.requestedStartDate] = request.requestedStartDate as CKRecordValue
+        record[Key.requestedEndDate] = request.requestedEndDate as CKRecordValue
+        record[Key.statusRawValue] = request.statusRawValue as CKRecordValue
+        record[Key.createdAt] = request.createdAt as CKRecordValue
+        record[Key.updatedAt] = request.updatedAt as CKRecordValue
+        return record
+    }
+
+    static func request(from record: CKRecord) throws -> CalendarAccessRequest {
+        guard let requesterMemberID = record[Key.requesterMemberID] as? String else { throw CloudKitRecordMappingError.missingField(Key.requesterMemberID) }
+        guard let ownerMemberID = record[Key.ownerMemberID] as? String else { throw CloudKitRecordMappingError.missingField(Key.ownerMemberID) }
+        guard let requestedStartDate = record[Key.requestedStartDate] as? Date else { throw CloudKitRecordMappingError.missingField(Key.requestedStartDate) }
+        guard let requestedEndDate = record[Key.requestedEndDate] as? Date else { throw CloudKitRecordMappingError.missingField(Key.requestedEndDate) }
+        guard let statusRawValue = record[Key.statusRawValue] as? String else { throw CloudKitRecordMappingError.missingField(Key.statusRawValue) }
+        guard let createdAt = record[Key.createdAt] as? Date else { throw CloudKitRecordMappingError.missingField(Key.createdAt) }
+        guard let updatedAt = record[Key.updatedAt] as? Date else { throw CloudKitRecordMappingError.missingField(Key.updatedAt) }
+
+        return CalendarAccessRequest(
+            id: record.recordID.recordName,
+            requesterMemberID: requesterMemberID,
+            ownerMemberID: ownerMemberID,
+            requestedStartDate: requestedStartDate,
+            requestedEndDate: requestedEndDate,
+            statusRawValue: statusRawValue,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
             cloudKitRecordName: record.recordID.recordName
         )
     }
@@ -834,6 +951,39 @@ final class CloudKitCoupleSpaceService {
         return PreparedCloudShare(rootRecord: rootRecord, share: share, container: container)
     }
 
+    func stopSharing(ownerMemberID: String) async throws {
+        cloudKitSharingInfo("stopSharing begin ownerMemberIDPresent=\((!ownerMemberID.isEmpty).description)")
+        try await ensureZone()
+        let rootRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
+        guard let root = try await fetchRecordIfPresent(with: rootRecordID) else {
+            cloudKitSharingInfo("stopSharing skipped; root missing")
+            return
+        }
+        root["schemaVersion"] = 1 as CKRecordValue
+        root["ownerMemberID"] = ownerMemberID as CKRecordValue
+
+        guard let shareRecordID = CloudKitStopSharingPlan.shareRecordIDToDelete(from: root) else {
+            cloudKitSharingInfo("stopSharing skipped; share missing")
+            return
+        }
+
+        do {
+            _ = try await modifyRecords(
+                saving: [root],
+                deleting: [shareRecordID],
+                savePolicy: .changedKeys,
+                atomically: true
+            )
+            cloudKitSharingInfo("stopSharing succeeded share=\(shareRecordID.recordName)")
+        } catch {
+            guard Self.isUnknownItem(error) else {
+                cloudKitSharingError("stopSharing failed share=\(shareRecordID.recordName) error=\(describeCloudKitFailure(error))")
+                throw error
+            }
+            cloudKitSharingInfo("stopSharing ignored missing share=\(shareRecordID.recordName)")
+        }
+    }
+
     @discardableResult
     func ensureShareRoot(ownerMemberID: String) async throws -> CKRecord {
         try await ensureZone()
@@ -906,6 +1056,61 @@ final class CloudKitCoupleSpaceService {
             _ = try? await modifyRecords(saving: [], deleting: [recordID], savePolicy: .changedKeys, atomically: false)
         } catch {
             cloudKitSharingError("writeProbe save failed label=\(label) record=\(recordName) error=\(describeCloudKitFailure(error))")
+        }
+    }
+
+    func sharedReadDiagnostic() async -> CloudKitSharedReadDiagnostic {
+        do {
+            let zoneIDs = try await sharedCoupleSpaceZoneIDs()
+            var eventMirrorCount = 0
+            var commentCount = 0
+            var invitationCount = 0
+            var accessRequestCount = 0
+
+            for sharedZoneID in zoneIDs {
+                eventMirrorCount += try await fetchRecords(
+                    matching: CKQuery(recordType: EventMirrorRecordMapper.recordType, predicate: NSPredicate(value: true)),
+                    in: sharedZoneID,
+                    database: sharedDatabase
+                ).count
+                commentCount += try await fetchRecords(
+                    matching: CKQuery(recordType: CommentRecordMapper.recordType, predicate: NSPredicate(value: true)),
+                    in: sharedZoneID,
+                    database: sharedDatabase
+                ).count
+                invitationCount += try await fetchRecords(
+                    matching: CKQuery(recordType: InvitationRecordMapper.recordType, predicate: NSPredicate(value: true)),
+                    in: sharedZoneID,
+                    database: sharedDatabase
+                ).count
+                accessRequestCount += try await fetchRecords(
+                    matching: CKQuery(recordType: CalendarAccessRequestRecordMapper.recordType, predicate: NSPredicate(value: true)),
+                    in: sharedZoneID,
+                    database: sharedDatabase
+                ).count
+            }
+
+            let diagnostic = CloudKitSharedReadDiagnostic(
+                sharedZoneCount: zoneIDs.count,
+                eventMirrorCount: eventMirrorCount,
+                commentCount: commentCount,
+                invitationCount: invitationCount,
+                accessRequestCount: accessRequestCount,
+                errorDescription: nil
+            )
+            cloudKitSharingInfo("sharedReadDiagnostic \(diagnostic.displayText.replacingOccurrences(of: "\n", with: " | "))")
+            return diagnostic
+        } catch {
+            let diagnostic = CloudKitSharedReadDiagnostic(
+                sharedZoneCount: 0,
+                eventMirrorCount: 0,
+                commentCount: 0,
+                invitationCount: 0,
+                accessRequestCount: 0,
+                errorDescription: describeCloudKitFailure(error)
+            )
+            cloudKitSharingError("sharedReadDiagnostic failed error=\(diagnostic.errorDescription ?? "missing")")
+            return diagnostic
         }
     }
 
@@ -1191,6 +1396,20 @@ final class CloudKitCoupleSpaceService {
         cloudKitSharingInfo("saveMirrorsForSync succeeded count=\(records.count)")
     }
 
+    func deleteMirrorsForSync(_ mirrors: [EventMirror]) async throws {
+        let recordIDs = mirrors.map { mirror in
+            CKRecord.ID(recordName: mirror.cloudKitRecordName ?? mirror.mirrorKey, zoneID: zoneID)
+        }
+        guard !recordIDs.isEmpty else {
+            cloudKitSharingInfo("deleteMirrorsForSync skipped; no mirrors")
+            return
+        }
+
+        cloudKitSharingInfo("deleteMirrorsForSync deleting records=\(recordIDs.map(\.recordName).joined(separator: ","))")
+        _ = try await modifyRecords(saving: [], deleting: recordIDs, savePolicy: .changedKeys, atomically: false)
+        cloudKitSharingInfo("deleteMirrorsForSync succeeded count=\(recordIDs.count)")
+    }
+
     func queueInvitationsForSync(_ invitations: [EventInvitation]) {
         ensureSyncDriverStarted()
         let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
@@ -1216,6 +1435,25 @@ final class CloudKitCoupleSpaceService {
         case .acceptedSharedZone:
             let targetZoneID = try await acceptedSharedZoneID(containingInvitationRecordName: invitation.cloudKitRecordName ?? invitation.id)
             try await saveInvitationsForSync([invitation], in: targetZoneID, database: sharedDatabase)
+        }
+    }
+
+    @MainActor
+    func saveCalendarAccessRequestForSync(
+        _ request: CalendarAccessRequest,
+        currentMemberID: String
+    ) async throws {
+        switch CloudKitAccessRequestWritePlan.destination(
+            ownerMemberID: request.ownerMemberID,
+            currentMemberID: currentMemberID
+        ) {
+        case .privateOwnerZone:
+            try await ensureZone()
+            try await ensureShareRoot(ownerMemberID: currentMemberID)
+            try await saveCalendarAccessRequestsForSync([request], in: zoneID, database: privateDatabase)
+        case .acceptedSharedZone:
+            let targetZoneID = try await acceptedSharedZoneID()
+            try await saveCalendarAccessRequestsForSync([request], in: targetZoneID, database: sharedDatabase)
         }
     }
 
@@ -1287,6 +1525,46 @@ final class CloudKitCoupleSpaceService {
             database: database
         )
         cloudKitSharingInfo("saveInvitationsForSync succeeded count=\(records.count)")
+    }
+
+    @MainActor
+    private func saveCalendarAccessRequestsForSync(
+        _ requests: [CalendarAccessRequest],
+        in targetZoneID: CKRecordZone.ID,
+        database: CKDatabase
+    ) async throws {
+        guard !requests.isEmpty else {
+            cloudKitSharingInfo("saveCalendarAccessRequestsForSync skipped; no requests")
+            return
+        }
+
+        let parentRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: targetZoneID)
+        var records: [CKRecord] = []
+        for request in requests {
+            let recordName = request.cloudKitRecordName ?? request.id
+            let recordID = CKRecord.ID(recordName: recordName, zoneID: targetZoneID)
+            let existingRecord = try await fetchRecordForUpsertIfPresent(with: recordID, database: database)
+            records.append(
+                CalendarAccessRequestRecordMapper.record(
+                    from: request,
+                    zoneID: targetZoneID,
+                    parentRecordID: parentRecordID,
+                    existingRecord: existingRecord
+                )
+            )
+        }
+
+        cloudKitSharingInfo(
+            "saveCalendarAccessRequestsForSync saving records=\(records.map { "\($0.recordType):\($0.recordID.recordName)" }.joined(separator: ",")) zoneOwner=\(targetZoneID.ownerName)"
+        )
+        _ = try await modifyRecords(
+            saving: records,
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: false,
+            database: database
+        )
+        cloudKitSharingInfo("saveCalendarAccessRequestsForSync succeeded count=\(records.count)")
     }
 
     @MainActor
@@ -1404,6 +1682,22 @@ final class CloudKitCoupleSpaceService {
         }
     }
 
+    func fetchCalendarAccessRequests() async throws -> [CalendarAccessRequest] {
+        let query = CKQuery(recordType: CalendarAccessRequestRecordMapper.recordType, predicate: NSPredicate(value: true))
+        var records = try await fetchRecords(matching: query, in: zoneID, database: privateDatabase)
+
+        let sharedZoneIDs = try await sharedCoupleSpaceZoneIDs()
+        for sharedZoneID in sharedZoneIDs {
+            cloudKitSharingInfo("fetchCalendarAccessRequests querying shared zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
+            records.append(contentsOf: try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase))
+        }
+
+        cloudKitSharingInfo("fetchCalendarAccessRequests fetched records=\(records.count)")
+        return try records.map {
+            try CalendarAccessRequestRecordMapper.request(from: $0)
+        }
+    }
+
     private func sharedCoupleSpaceZoneIDs() async throws -> [CKRecordZone.ID] {
         let zones = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[CKRecordZone], Error>) in
             sharedDatabase.fetchAllRecordZones { zones, error in
@@ -1438,6 +1732,21 @@ final class CloudKitCoupleSpaceService {
             domain: CKError.errorDomain,
             code: CKError.Code.unknownItem.rawValue,
             userInfo: [NSLocalizedDescriptionKey: "No accepted CloudKit share contains event \(eventRecordName)."]
+        )
+    }
+
+    private func acceptedSharedZoneID() async throws -> CKRecordZone.ID {
+        let zoneIDs = try await sharedCoupleSpaceZoneIDs()
+        if let zoneID = zoneIDs.first {
+            cloudKitSharingInfo("acceptedSharedZoneID selected owner=\(zoneID.ownerName)")
+            return zoneID
+        }
+
+        cloudKitSharingError("acceptedSharedZoneID failed; no accepted share zones")
+        throw NSError(
+            domain: CKError.errorDomain,
+            code: CKError.Code.unknownItem.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "No accepted CloudKit share is available for calendar access requests."]
         )
     }
 

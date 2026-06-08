@@ -43,6 +43,17 @@ DEFINE SCHEMA
         createdLocalEventID STRING
     );
 
+    RECORD TYPE CalendarAccessRequest (
+        "___recordID" REFERENCE QUERYABLE,
+        requesterMemberID STRING QUERYABLE,
+        ownerMemberID STRING QUERYABLE,
+        requestedStartDate TIMESTAMP QUERYABLE SORTABLE,
+        requestedEndDate TIMESTAMP,
+        statusRawValue STRING QUERYABLE,
+        createdAt TIMESTAMP,
+        updatedAt TIMESTAMP
+    );
+
     RECORD TYPE EventComment (
         "___recordID" REFERENCE QUERYABLE,
         eventMirrorID STRING QUERYABLE,

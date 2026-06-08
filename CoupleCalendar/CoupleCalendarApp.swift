@@ -29,6 +29,7 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
 enum ShareCalLaunchDiagnostics {
     static func runIfRequested(
         services: AppServices,
+        settings: SettingsStore,
         arguments: [String] = ProcessInfo.processInfo.arguments
     ) async {
         if ShareCalLaunchDiagnosticPlan.shouldSeedCalendarEvent(arguments: arguments) {
@@ -45,6 +46,21 @@ enum ShareCalLaunchDiagnostics {
 
         if ShareCalLaunchDiagnosticPlan.shouldRunCloudKitWriteProbe(arguments: arguments) {
             await services.cloudKit.runPrivateDatabaseWriteProbe()
+        }
+
+        if ShareCalLaunchDiagnosticPlan.shouldRunSharedReadProbe(arguments: arguments) {
+            let diagnostic = await services.cloudKit.sharedReadDiagnostic()
+            NSLog("ShareCal shared read probe:\n\(diagnostic.displayText)")
+            NSLog("ShareCal shared read probe proves no access: \(diagnostic.provesNoSharedCalendarReadAccess)")
+        }
+
+        if ShareCalLaunchDiagnosticPlan.shouldRunStopSharingProbe(arguments: arguments) {
+            do {
+                try await services.cloudKit.stopSharing(ownerMemberID: settings.currentMemberID)
+                NSLog("ShareCal stop sharing probe succeeded")
+            } catch {
+                NSLog("ShareCal stop sharing probe failed: \(error)")
+            }
         }
     }
 }
@@ -70,7 +86,7 @@ struct CoupleCalendarApp: App {
                 .environment(services)
                 .modelContainer(modelContainer)
                 .task {
-                    await ShareCalLaunchDiagnostics.runIfRequested(services: services)
+                    await ShareCalLaunchDiagnostics.runIfRequested(services: services, settings: settings)
                 }
         }
     }

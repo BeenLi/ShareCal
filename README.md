@@ -105,3 +105,21 @@ Expected result: Partner logs show `acceptShare succeeded` and
 `ShareCal E2E Smoke Test` in the `Partner` column. If the Partner simulator has
 no writable calendar, the app creates and selects a local `ShareCal` calendar
 before syncing.
+
+## Stop Sharing Privacy Probe
+
+Release builds include launch diagnostics for validating that a stopped share is
+not readable from the Partner simulator.
+
+1. Before stopping sharing, run the Partner app with
+   `-ShareCalSharedReadProbe`. The runtime log prints `Shared Zones` and shared
+   record counts for `EventMirror`, `EventComment`, `EventInvitation`, and
+   `CalendarAccessRequest`.
+2. Run the Owner app with `-ShareCalStopICloudSharing`. The runtime log must
+   print `ShareCal stop sharing probe succeeded`. If it reports an iCloud
+   account error, refresh the Owner simulator's Apple Account sign-in and retry.
+3. Run the Partner app with `-ShareCalSharedReadProbe` again.
+
+Expected result after a successful stop-sharing probe: `Shared Zones: 0`, all
+shared record counts are `0`, and the log prints
+`ShareCal shared read probe proves no access: true`.

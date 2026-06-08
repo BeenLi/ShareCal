@@ -115,6 +115,29 @@ struct ShareCalStrings {
     var privacySection: String { text("Privacy", "隐私") }
     var defaultVisibilityPicker: String { text("Default visibility", "默认可见性") }
     var iCloudShareSection: String { text("iCloud Share", "iCloud 共享") }
+    var iCloudOutgoingSharingLabel: String { text("Sharing With", "我正在共享给") }
+    var iCloudIncomingSharingLabel: String { text("Shared With Me", "共享给我的日历") }
+    var accessRequestSection: String { text("History Requests", "历史日程申请") }
+    var requestHistoryAccessButton: String { text("Request History Access", "申请查看历史日程") }
+    var accessRequestStartLabel: String { text("Start", "开始") }
+    var accessRequestEndLabel: String { text("End", "结束") }
+    var pendingAccessRequestsLabel: String { text("Pending Requests", "待处理申请") }
+    var outgoingAccessRequestsLabel: String { text("My Requests", "我的申请") }
+    var approveButton: String { text("Approve", "同意") }
+    var accessRequestSentMessage: String { text("Request sent.", "申请已发送。") }
+    var accessRequestUpdatedMessage: String { text("Request updated.", "申请已更新。") }
+    var invalidAccessRequestRangeMessage: String {
+        text("End date must be after start date.", "结束日期必须晚于开始日期。")
+    }
+    var stopICloudSharingButton: String { text("Stop Sharing", "停止共享") }
+    var stopICloudSharingConfirmationTitle: String { text("Stop iCloud Sharing?", "停止 iCloud 共享？") }
+    var stopICloudSharingConfirmationMessage: String {
+        text(
+            "Your partner will no longer be able to read your shared calendar from iCloud.",
+            "对方将无法再通过 iCloud 读取你共享的日历。"
+        )
+    }
+    var stopICloudSharingSucceeded: String { text("Sharing stopped.", "已停止共享。") }
     var createsICloudShareDescription: String {
         text("Creates an iCloud share for your partner.", "为对方创建 iCloud 共享。")
     }
@@ -194,6 +217,14 @@ struct ShareCalStrings {
         case .accepted: text("Accepted", "已接受")
         case .declined: text("Declined", "已拒绝")
         case .canceled: text("Canceled", "已取消")
+        }
+    }
+
+    func accessRequestStatusTitle(for status: CalendarAccessRequestStatus) -> String {
+        switch status {
+        case .pending: text("Pending", "待处理")
+        case .approved: text("Approved", "已同意")
+        case .declined: text("Declined", "已拒绝")
         }
     }
 
@@ -551,6 +582,57 @@ enum InvitationStatus: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum CalendarAccessRequestStatus: String, Codable, CaseIterable, Identifiable {
+    case pending
+    case approved
+    case declined
+
+    var id: String { rawValue }
+}
+
+enum CalendarSharingWindowPlan {
+    static let defaultHistoryDuration: TimeInterval = 72 * 60 * 60
+    static let defaultFutureDuration: TimeInterval = 365 * 24 * 60 * 60
+
+    static func defaultWindows(now: Date = .now) -> [DateInterval] {
+        [
+            DateInterval(
+                start: now.addingTimeInterval(-defaultHistoryDuration),
+                end: now.addingTimeInterval(defaultFutureDuration)
+            )
+        ]
+    }
+
+    static func effectiveWindows(
+        now: Date = .now,
+        accessRequests: [CalendarAccessRequest],
+        ownerMemberID: String
+    ) -> [DateInterval] {
+        let approvedRequestWindows = accessRequests.compactMap { request -> DateInterval? in
+            guard request.ownerMemberID == ownerMemberID,
+                  request.status == .approved,
+                  request.requestedEndDate > request.requestedStartDate else {
+                return nil
+            }
+            return DateInterval(start: request.requestedStartDate, end: request.requestedEndDate)
+        }
+        return defaultWindows(now: now) + approvedRequestWindows
+    }
+
+    static func contains(_ date: Date, in windows: [DateInterval]) -> Bool {
+        windows.contains { window in
+            date >= window.start && date < window.end
+        }
+    }
+
+    static func enclosingInterval(for windows: [DateInterval]) -> DateInterval {
+        precondition(!windows.isEmpty, "Calendar sharing windows must not be empty.")
+        let start = windows.map(\.start).min() ?? windows[0].start
+        let end = windows.map(\.end).max() ?? windows[0].end
+        return DateInterval(start: start, end: end)
+    }
+}
+
 enum SyncPhase: String {
     case idle
     case syncing
@@ -855,6 +937,49 @@ final class EventInvitation: Identifiable {
 }
 
 @Model
+final class CalendarAccessRequest: Identifiable {
+    @Attribute(.unique) var id: String
+    var requesterMemberID: String
+    var ownerMemberID: String
+    var requestedStartDate: Date
+    var requestedEndDate: Date
+    var statusRawValue: String
+    var createdAt: Date
+    var updatedAt: Date
+    var cloudKitRecordName: String?
+
+    var status: CalendarAccessRequestStatus {
+        get { CalendarAccessRequestStatus(rawValue: statusRawValue) ?? .pending }
+        set {
+            statusRawValue = newValue.rawValue
+            updatedAt = .now
+        }
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        requesterMemberID: String,
+        ownerMemberID: String,
+        requestedStartDate: Date,
+        requestedEndDate: Date,
+        statusRawValue: String = CalendarAccessRequestStatus.pending.rawValue,
+        createdAt: Date = .now,
+        updatedAt: Date = .now,
+        cloudKitRecordName: String? = nil
+    ) {
+        self.id = id
+        self.requesterMemberID = requesterMemberID
+        self.ownerMemberID = ownerMemberID
+        self.requestedStartDate = requestedStartDate
+        self.requestedEndDate = requestedEndDate
+        self.statusRawValue = statusRawValue
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.cloudKitRecordName = cloudKitRecordName
+    }
+}
+
+@Model
 final class EventComment: Identifiable {
     @Attribute(.unique) var id: String
     var eventMirrorID: String
@@ -925,6 +1050,7 @@ enum ShareCalModelContainer {
         EventMirror.self,
         LocalEventShadow.self,
         EventInvitation.self,
+        CalendarAccessRequest.self,
         EventComment.self,
         SyncState.self
     ])

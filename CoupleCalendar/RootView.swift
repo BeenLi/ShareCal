@@ -2389,19 +2389,26 @@ struct InvitationRow: View {
 }
 
 struct SettingsTabView: View {
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
     @Environment(SettingsStore.self) private var settings
     @Environment(AppServices.self) private var services
+    @Query(sort: \CalendarAccessRequest.createdAt) private var accessRequests: [CalendarAccessRequest]
     @State private var authorizationState: CalendarAuthorizationState = .unknown
     @State private var calendars: [CalendarDescriptor] = []
     @State private var preparedShare: PreparedCloudShare?
     @State private var errorMessage: String?
+    @State private var accessRequestMessage: String?
     @State private var calendarAccessMessage: String?
     @State private var isRequestingCalendarAccess = false
     @State private var cloudKitDiagnosticMessage: String?
     @State private var isCheckingCloudKitAccount = false
     @State private var isPreparingShare = false
+    @State private var isStoppingShare = false
     @State private var activeSharePreparationID: UUID?
+    @State private var requestStartDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var requestEndDate = Calendar.current.date(byAdding: .day, value: -4, to: Date()) ?? Date()
+    @State private var showStopSharingConfirmation = false
 
     private var calendarAccessButtonTitle: String {
         let strings = settings.strings
@@ -2412,6 +2419,19 @@ struct SettingsTabView: View {
             return strings.calendarAccessGrantedButton
         default:
             return strings.requestFullCalendarAccessButton
+        }
+    }
+
+    private var pendingIncomingAccessRequests: [CalendarAccessRequest] {
+        accessRequests.filter { request in
+            request.ownerMemberID == settings.currentMemberID && request.status == .pending
+        }
+    }
+
+    private var outgoingAccessRequests: [CalendarAccessRequest] {
+        accessRequests.filter { request in
+            request.requesterMemberID == settings.currentMemberID
+                && request.ownerMemberID == settings.partnerMemberID
         }
     }
 
@@ -2493,6 +2513,8 @@ struct SettingsTabView: View {
             }
 
             Section(strings.iCloudShareSection) {
+                LabeledContent(strings.iCloudOutgoingSharingLabel, value: settings.partnerMemberID)
+                LabeledContent(strings.iCloudIncomingSharingLabel, value: settings.partnerMemberID)
                 Button(strings.createOrOpenShareButton(isPreparing: isPreparingShare)) {
                     Task { await prepareShare() }
                 }
@@ -2501,6 +2523,10 @@ struct SettingsTabView: View {
                     Task { await checkCloudKitStatus() }
                 }
                 .disabled(!services.isCloudKitEnabled || isCheckingCloudKitAccount)
+                Button(strings.stopICloudSharingButton, role: .destructive) {
+                    showStopSharingConfirmation = true
+                }
+                .disabled(!services.isCloudKitEnabled || isStoppingShare)
                 Text(strings.createsICloudShareDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2512,6 +2538,58 @@ struct SettingsTabView: View {
                 if let cloudKitDiagnosticMessage {
                     Text(cloudKitDiagnosticMessage)
                         .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section(strings.accessRequestSection) {
+                DatePicker(strings.accessRequestStartLabel, selection: $requestStartDate, displayedComponents: .date)
+                DatePicker(strings.accessRequestEndLabel, selection: $requestEndDate, displayedComponents: .date)
+                Button(strings.requestHistoryAccessButton) {
+                    sendAccessRequest()
+                }
+                .disabled(!services.isCloudKitEnabled)
+
+                if !pendingIncomingAccessRequests.isEmpty {
+                    Text(strings.pendingAccessRequestsLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(pendingIncomingAccessRequests) { request in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(accessRequestRangeText(for: request))
+                            Text(request.requesterMemberID)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                Button(strings.approveButton) {
+                                    update(request, status: .approved)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button(strings.declineButton, role: .destructive) {
+                                    update(request, status: .declined)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if !outgoingAccessRequests.isEmpty {
+                    Text(strings.outgoingAccessRequestsLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(outgoingAccessRequests) { request in
+                        LabeledContent(
+                            accessRequestRangeText(for: request),
+                            value: strings.accessRequestStatusTitle(for: request.status)
+                        )
+                    }
+                }
+
+                if let accessRequestMessage {
+                    Text(accessRequestMessage)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -2533,6 +2611,14 @@ struct SettingsTabView: View {
             CloudSharingController(preparedShare: share) { message in
                 errorMessage = strings.cloudKitShareFailed(message)
             }
+        }
+        .alert(strings.stopICloudSharingConfirmationTitle, isPresented: $showStopSharingConfirmation) {
+            Button(strings.stopICloudSharingButton, role: .destructive) {
+                Task { await stopSharing() }
+            }
+            Button(strings.cancelButton, role: .cancel) {}
+        } message: {
+            Text(strings.stopICloudSharingConfirmationMessage)
         }
     }
 
@@ -2610,6 +2696,65 @@ struct SettingsTabView: View {
         }
     }
 
+    private func sendAccessRequest() {
+        errorMessage = nil
+        accessRequestMessage = nil
+
+        guard requestEndDate > requestStartDate else {
+            accessRequestMessage = settings.strings.invalidAccessRequestRangeMessage
+            return
+        }
+
+        let request = CalendarAccessRequest(
+            requesterMemberID: settings.currentMemberID,
+            ownerMemberID: settings.partnerMemberID,
+            requestedStartDate: requestStartDate,
+            requestedEndDate: requestEndDate
+        )
+        modelContext.insert(request)
+        do {
+            try modelContext.save()
+            accessRequestMessage = settings.strings.accessRequestSentMessage
+            saveAccessRequestToCloudKit(request)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func update(_ request: CalendarAccessRequest, status: CalendarAccessRequestStatus) {
+        errorMessage = nil
+        accessRequestMessage = nil
+
+        request.status = status
+        do {
+            try modelContext.save()
+            accessRequestMessage = settings.strings.accessRequestUpdatedMessage
+            saveAccessRequestToCloudKit(request)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func saveAccessRequestToCloudKit(_ request: CalendarAccessRequest) {
+        guard let cloudKit = services.cloudKitIfAvailable else { return }
+        Task {
+            do {
+                try await cloudKit.saveCalendarAccessRequestForSync(
+                    request,
+                    currentMemberID: settings.currentMemberID
+                )
+            } catch {
+                errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
+            }
+        }
+    }
+
+    private func accessRequestRangeText(for request: CalendarAccessRequest) -> String {
+        let start = request.requestedStartDate.formatted(date: .abbreviated, time: .omitted)
+        let end = request.requestedEndDate.formatted(date: .abbreviated, time: .omitted)
+        return "\(start) - \(end)"
+    }
+
     @MainActor
     private func prepareShare() async {
         guard !isPreparingShare else { return }
@@ -2643,6 +2788,26 @@ struct SettingsTabView: View {
         }
         isPreparingShare = false
         activeSharePreparationID = nil
+    }
+
+    @MainActor
+    private func stopSharing() async {
+        guard !isStoppingShare else { return }
+        errorMessage = nil
+        guard let cloudKit = services.cloudKitIfAvailable else {
+            errorMessage = settings.strings.iCloudSharingUnavailableLocalBuild
+            return
+        }
+
+        isStoppingShare = true
+        defer { isStoppingShare = false }
+
+        do {
+            try await cloudKit.stopSharing(ownerMemberID: settings.currentMemberID)
+            errorMessage = settings.strings.stopICloudSharingSucceeded
+        } catch {
+            errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
+        }
     }
 
     private func checkCloudKitStatus() async {

@@ -16,12 +16,17 @@ struct EventMirrorService {
         from events: [CalendarSourceEvent],
         selectedCalendarIDs: Set<String>,
         ownerMemberID: String,
-        visibility: EventVisibility
+        visibility: EventVisibility,
+        sharingWindows: [DateInterval]? = nil
     ) -> [EventMirror] {
         guard visibility != .hidden else { return [] }
 
         return events
             .filter { selectedCalendarIDs.contains($0.calendarIdentifier) }
+            .filter { event in
+                guard let sharingWindows else { return true }
+                return Self.isEvent(event, inside: sharingWindows)
+            }
             .map { event in
                 let fingerprint = Self.fingerprint(for: event)
                 let mirrorKey = Self.makeMirrorKey(
@@ -58,10 +63,15 @@ struct EventMirrorService {
     func makeShadows(
         from events: [CalendarSourceEvent],
         selectedCalendarIDs: Set<String>,
-        uploadedAt: Date
+        uploadedAt: Date,
+        sharingWindows: [DateInterval]? = nil
     ) -> [LocalEventShadow] {
         events
             .filter { selectedCalendarIDs.contains($0.calendarIdentifier) }
+            .filter { event in
+                guard let sharingWindows else { return true }
+                return Self.isEvent(event, inside: sharingWindows)
+            }
             .map { event in
                 let fingerprint = Self.fingerprint(for: event)
                 let mirrorKey = Self.makeMirrorKey(
@@ -139,6 +149,17 @@ struct EventMirrorService {
             .map { Self.deletedMirror(from: $0, deletedAt: deletedAt) }
     }
 
+    func mirrorsOutsideSharingWindows(
+        _ mirrors: [EventMirror],
+        sharingWindows: [DateInterval]
+    ) -> [EventMirror] {
+        mirrors
+            .filter { $0.deletedAt == nil }
+            .filter { mirror in
+                !CalendarSharingWindowPlan.contains(mirror.occurrenceStartDate, in: sharingWindows)
+            }
+    }
+
     private static func deletedMirror(
         from mirror: EventMirror,
         deletedAt: Date,
@@ -193,6 +214,10 @@ struct EventMirrorService {
         case .hidden:
             return ("", nil, nil, nil)
         }
+    }
+
+    private static func isEvent(_ event: CalendarSourceEvent, inside sharingWindows: [DateInterval]) -> Bool {
+        CalendarSharingWindowPlan.contains(event.occurrenceStartDate, in: sharingWindows)
     }
 }
 

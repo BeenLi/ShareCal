@@ -72,6 +72,10 @@ for field in ___recordID creatorMemberID inviteeMemberID title startDate endDate
   require_schema_field "EventInvitation" "$field"
 done
 
+for field in ___recordID requesterMemberID ownerMemberID requestedStartDate requestedEndDate statusRawValue createdAt updatedAt; do
+  require_schema_field "CalendarAccessRequest" "$field"
+done
+
 for field in ___recordID eventMirrorID authorMemberID body createdAt editedAt deletedAt isRead; do
   require_schema_field "EventComment" "$field"
 done

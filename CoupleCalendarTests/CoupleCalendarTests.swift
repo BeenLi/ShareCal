@@ -212,6 +212,165 @@ final class EventMirrorServiceTests: XCTestCase {
         XCTAssertEqual(tombstones[0].mirrorKey, "work:event-1:1800")
         XCTAssertEqual(tombstones[0].deletedAt, deletedAt)
     }
+
+    func testFiltersMirrorsAndShadowsToAllowedSharingWindows() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let window = CalendarSharingWindowPlan.defaultWindows(now: now)[0]
+        let oldEvent = calendarEvent(id: "old", startDate: now.addingTimeInterval(-4 * 24 * 60 * 60))
+        let recentEvent = calendarEvent(id: "recent", startDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
+        let futureEvent = calendarEvent(id: "future", startDate: now.addingTimeInterval(10 * 24 * 60 * 60))
+
+        let mirrors = EventMirrorService().makeMirrors(
+            from: [oldEvent, recentEvent, futureEvent],
+            selectedCalendarIDs: ["work"],
+            ownerMemberID: "me",
+            visibility: .fullDetails,
+            sharingWindows: [window]
+        )
+        let shadows = EventMirrorService().makeShadows(
+            from: [oldEvent, recentEvent, futureEvent],
+            selectedCalendarIDs: ["work"],
+            uploadedAt: now,
+            sharingWindows: [window]
+        )
+
+        XCTAssertEqual(mirrors.map(\.title), ["recent", "future"])
+        XCTAssertEqual(shadows.map(\.localEventIdentifier), ["recent", "future"])
+    }
+
+    func testBuildsHardDeleteRecordNamesForOutOfWindowMirrorsWithoutTombstones() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let allowed = CalendarSharingWindowPlan.defaultWindows(now: now)
+        let oldMirror = eventMirror(
+            id: "old",
+            ownerMemberID: "me",
+            startDate: now.addingTimeInterval(-4 * 24 * 60 * 60),
+            cloudKitRecordName: "old-record"
+        )
+        let recentMirror = eventMirror(
+            id: "recent",
+            ownerMemberID: "me",
+            startDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            cloudKitRecordName: "recent-record"
+        )
+
+        let stale = EventMirrorService().mirrorsOutsideSharingWindows(
+            [oldMirror, recentMirror],
+            sharingWindows: allowed
+        )
+
+        XCTAssertEqual(stale.map(\.cloudKitRecordName), ["old-record"])
+        XCTAssertNil(stale[0].deletedAt)
+        XCTAssertEqual(stale[0].title, "old")
+    }
+
+    private func calendarEvent(id: String, startDate: Date) -> CalendarSourceEvent {
+        CalendarSourceEvent(
+            eventIdentifier: id,
+            calendarIdentifier: "work",
+            calendarTitle: "Work",
+            calendarColorHex: "#3A86FF",
+            startDate: startDate,
+            endDate: startDate.addingTimeInterval(60 * 60),
+            occurrenceStartDate: startDate,
+            isAllDay: false,
+            timeZoneIdentifier: "Asia/Singapore",
+            title: id,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+    }
+
+    private func eventMirror(
+        id: String,
+        ownerMemberID: String,
+        startDate: Date,
+        cloudKitRecordName: String
+    ) -> EventMirror {
+        EventMirror(
+            id: id,
+            ownerMemberID: ownerMemberID,
+            mirrorKey: id,
+            sourceCalendarID: "work",
+            sourceCalendarTitle: "Work",
+            occurrenceStartDate: startDate,
+            startDate: startDate,
+            endDate: startDate.addingTimeInterval(60 * 60),
+            isAllDay: false,
+            timeZoneIdentifier: "Asia/Singapore",
+            title: id,
+            location: "Private",
+            notes: "Sensitive",
+            urlString: nil,
+            calendarColorHex: "#3A86FF",
+            visibilityRawValue: EventVisibility.fullDetails.rawValue,
+            deletedAt: nil,
+            cloudKitRecordName: cloudKitRecordName
+        )
+    }
+}
+
+final class CalendarSharingWindowPlanTests: XCTestCase {
+    func testDefaultWindowSharesRollingLastSeventyTwoHoursAndFutureYear() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+
+        let windows = CalendarSharingWindowPlan.defaultWindows(now: now)
+
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0].start, now.addingTimeInterval(-72 * 60 * 60))
+        XCTAssertEqual(windows[0].end, now.addingTimeInterval(365 * 24 * 60 * 60))
+        XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-73 * 60 * 60), in: windows))
+        XCTAssertTrue(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-71 * 60 * 60), in: windows))
+    }
+
+    func testApprovedRequestsExpandEffectiveWindowsForRequestedOwnerOnly() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let approvedStart = now.addingTimeInterval(-30 * 24 * 60 * 60)
+        let approvedEnd = now.addingTimeInterval(-20 * 24 * 60 * 60)
+        let approved = CalendarAccessRequest(
+            requesterMemberID: "partner",
+            ownerMemberID: "me",
+            requestedStartDate: approvedStart,
+            requestedEndDate: approvedEnd,
+            statusRawValue: CalendarAccessRequestStatus.approved.rawValue
+        )
+        let pending = CalendarAccessRequest(
+            requesterMemberID: "partner",
+            ownerMemberID: "me",
+            requestedStartDate: now.addingTimeInterval(-60 * 24 * 60 * 60),
+            requestedEndDate: now.addingTimeInterval(-50 * 24 * 60 * 60),
+            statusRawValue: CalendarAccessRequestStatus.pending.rawValue
+        )
+        let otherOwner = CalendarAccessRequest(
+            requesterMemberID: "partner",
+            ownerMemberID: "someone-else",
+            requestedStartDate: now.addingTimeInterval(-90 * 24 * 60 * 60),
+            requestedEndDate: now.addingTimeInterval(-80 * 24 * 60 * 60),
+            statusRawValue: CalendarAccessRequestStatus.approved.rawValue
+        )
+
+        let windows = CalendarSharingWindowPlan.effectiveWindows(
+            now: now,
+            accessRequests: [approved, pending, otherOwner],
+            ownerMemberID: "me"
+        )
+
+        XCTAssertTrue(CalendarSharingWindowPlan.contains(approvedStart.addingTimeInterval(60), in: windows))
+        XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-55 * 24 * 60 * 60), in: windows))
+        XCTAssertFalse(CalendarSharingWindowPlan.contains(now.addingTimeInterval(-85 * 24 * 60 * 60), in: windows))
+        XCTAssertTrue(CalendarSharingWindowPlan.contains(now.addingTimeInterval(30 * 24 * 60 * 60), in: windows))
+    }
+
+    func testEnclosingIntervalUsesEarliestStartAndLatestEnd() {
+        let first = DateInterval(start: Date(timeIntervalSince1970: 10), end: Date(timeIntervalSince1970: 20))
+        let second = DateInterval(start: Date(timeIntervalSince1970: -10), end: Date(timeIntervalSince1970: 30))
+
+        let enclosing = CalendarSharingWindowPlan.enclosingInterval(for: [first, second])
+
+        XCTAssertEqual(enclosing.start, Date(timeIntervalSince1970: -10))
+        XCTAssertEqual(enclosing.end, Date(timeIntervalSince1970: 30))
+    }
 }
 
 final class ShareCalCalendarBootstrapPlanTests: XCTestCase {
@@ -274,6 +433,9 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.settingsTitle, "Settings")
         XCTAssertEqual(strings.createOrOpenShareButton(isPreparing: false), "Create or Open Share")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "Full details")
+        XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "Sharing With")
+        XCTAssertEqual(strings.iCloudIncomingSharingLabel, "Shared With Me")
+        XCTAssertEqual(strings.stopICloudSharingButton, "Stop Sharing")
     }
 
     func testChineseProvidesPrimaryLabels() {
@@ -284,6 +446,9 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.settingsTitle, "设置")
         XCTAssertEqual(strings.createOrOpenShareButton(isPreparing: false), "创建或打开共享")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "完整详情")
+        XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "我正在共享给")
+        XCTAssertEqual(strings.iCloudIncomingSharingLabel, "共享给我的日历")
+        XCTAssertEqual(strings.stopICloudSharingButton, "停止共享")
     }
 }
 
@@ -793,6 +958,59 @@ final class CloudKitRecordMappingTests: XCTestCase {
         XCTAssertEqual(decoded.updatedAt, Date(timeIntervalSince1970: 9_100))
         XCTAssertEqual(decoded.cloudKitRecordName, "invite-record")
     }
+
+    func testCalendarAccessRequestRoundTripsThroughCloudKitRecord() throws {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
+        let request = CalendarAccessRequest(
+            id: "request-1",
+            requesterMemberID: "partner",
+            ownerMemberID: "me",
+            requestedStartDate: Date(timeIntervalSince1970: 1_000),
+            requestedEndDate: Date(timeIntervalSince1970: 2_000),
+            statusRawValue: CalendarAccessRequestStatus.pending.rawValue,
+            createdAt: Date(timeIntervalSince1970: 900),
+            updatedAt: Date(timeIntervalSince1970: 950),
+            cloudKitRecordName: "request-record"
+        )
+
+        let record = CalendarAccessRequestRecordMapper.record(from: request, zoneID: zoneID)
+        let decoded = try CalendarAccessRequestRecordMapper.request(from: record)
+
+        XCTAssertEqual(record.recordType, "CalendarAccessRequest")
+        XCTAssertEqual(record.recordID.recordName, "request-record")
+        XCTAssertEqual(decoded.id, "request-record")
+        XCTAssertEqual(decoded.requesterMemberID, "partner")
+        XCTAssertEqual(decoded.ownerMemberID, "me")
+        XCTAssertEqual(decoded.requestedStartDate, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(decoded.requestedEndDate, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(decoded.status, .pending)
+        XCTAssertEqual(decoded.createdAt, Date(timeIntervalSince1970: 900))
+        XCTAssertEqual(decoded.updatedAt, Date(timeIntervalSince1970: 950))
+        XCTAssertEqual(decoded.cloudKitRecordName, "request-record")
+    }
+}
+
+final class CloudKitStopSharingPlanTests: XCTestCase {
+    func testNoopsWhenRootHasNoShareReference() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
+        let root = CKRecord(
+            recordType: "CoupleSpace",
+            recordID: CKRecord.ID(recordName: CloudKitCoupleSpaceService.rootRecordName, zoneID: zoneID)
+        )
+
+        XCTAssertNil(CloudKitStopSharingPlan.shareRecordIDToDelete(from: root))
+    }
+
+    func testDeletesActiveShareRecordWhenRootIsShared() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
+        let root = CKRecord(
+            recordType: "CoupleSpace",
+            recordID: CKRecord.ID(recordName: CloudKitCoupleSpaceService.rootRecordName, zoneID: zoneID)
+        )
+        let share = CKShare(rootRecord: root)
+
+        XCTAssertEqual(CloudKitStopSharingPlan.shareRecordIDToDelete(from: root), share.recordID)
+    }
 }
 
 final class CloudKitCommentWritePlanTests: XCTestCase {
@@ -936,6 +1154,58 @@ final class CloudKitContainerDiagnosticPlanTests: XCTestCase {
         )
     }
 
+}
+
+final class CloudKitSharedReadDiagnosticTests: XCTestCase {
+    func testDisplaysReadableSharedRecordCounts() {
+        let diagnostic = CloudKitSharedReadDiagnostic(
+            sharedZoneCount: 1,
+            eventMirrorCount: 2,
+            commentCount: 3,
+            invitationCount: 4,
+            accessRequestCount: 5,
+            errorDescription: nil
+        )
+
+        XCTAssertEqual(
+            diagnostic.displayText,
+            """
+            Shared Zones: 1
+            EventMirror: 2
+            EventComment: 3
+            EventInvitation: 4
+            CalendarAccessRequest: 5
+            """
+        )
+        XCTAssertFalse(diagnostic.provesNoSharedCalendarReadAccess)
+    }
+
+    func testZeroSharedZonesAndRecordsProvesNoSharedCalendarReadAccess() {
+        let diagnostic = CloudKitSharedReadDiagnostic(
+            sharedZoneCount: 0,
+            eventMirrorCount: 0,
+            commentCount: 0,
+            invitationCount: 0,
+            accessRequestCount: 0,
+            errorDescription: nil
+        )
+
+        XCTAssertTrue(diagnostic.provesNoSharedCalendarReadAccess)
+    }
+
+    func testErrorDoesNotProveNoSharedCalendarReadAccess() {
+        let diagnostic = CloudKitSharedReadDiagnostic(
+            sharedZoneCount: 0,
+            eventMirrorCount: 0,
+            commentCount: 0,
+            invitationCount: 0,
+            accessRequestCount: 0,
+            errorDescription: "not authenticated"
+        )
+
+        XCTAssertFalse(diagnostic.provesNoSharedCalendarReadAccess)
+        XCTAssertTrue(diagnostic.displayText.contains("Error: not authenticated"))
+    }
 }
 
 final class CloudKitShareAcceptancePlanTests: XCTestCase {
@@ -1160,6 +1430,32 @@ final class ShareCalLaunchDiagnosticPlanTests: XCTestCase {
 
     func testCloudKitWriteProbeUsesRealShareRootRecordType() {
         XCTAssertEqual(ShareCalLaunchDiagnosticPlan.cloudKitWriteProbeRecordType, "CoupleSpace")
+    }
+
+    func testRunsStopSharingProbeOnlyWhenLaunchArgumentIsPresent() {
+        XCTAssertTrue(
+            ShareCalLaunchDiagnosticPlan.shouldRunStopSharingProbe(
+                arguments: ["ShareCal", "-ShareCalStopICloudSharing"]
+            )
+        )
+        XCTAssertFalse(
+            ShareCalLaunchDiagnosticPlan.shouldRunStopSharingProbe(
+                arguments: ["ShareCal"]
+            )
+        )
+    }
+
+    func testRunsSharedReadProbeOnlyWhenLaunchArgumentIsPresent() {
+        XCTAssertTrue(
+            ShareCalLaunchDiagnosticPlan.shouldRunSharedReadProbe(
+                arguments: ["ShareCal", "-ShareCalSharedReadProbe"]
+            )
+        )
+        XCTAssertFalse(
+            ShareCalLaunchDiagnosticPlan.shouldRunSharedReadProbe(
+                arguments: ["ShareCal"]
+            )
+        )
     }
 }
 
