@@ -103,7 +103,11 @@ struct CalendarTabView: View {
     }
 
     var visibleMirrors: [EventMirror] {
-        activeMirrors.filter { mirror in
+        CalendarMirrorVisibilityPlan.memberMirrors(
+            activeMirrors,
+            currentMemberID: settings.currentMemberID,
+            partnerShareOwnerID: settings.partnerShareOwnerID
+        ).filter { mirror in
             visibleInterval.contains(mirror.startDate)
         }
     }
@@ -131,7 +135,7 @@ struct CalendarTabView: View {
     }
 
     var partnerEvents: [EventMirror] {
-        visibleOrdinaryMirrors.filter { $0.ownerMemberID != settings.currentMemberID }
+        visibleOrdinaryMirrors.filter { $0.ownerMemberID == settings.partnerShareOwnerID }
     }
 
     var visibleMirrorByID: [String: EventMirror] {
@@ -2405,10 +2409,12 @@ struct SettingsTabView: View {
     @State private var isCheckingCloudKitAccount = false
     @State private var isPreparingShare = false
     @State private var isStoppingShare = false
+    @State private var isDeletingICloudData = false
     @State private var activeSharePreparationID: UUID?
     @State private var requestStartDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var requestEndDate = Calendar.current.date(byAdding: .day, value: -4, to: Date()) ?? Date()
     @State private var showStopSharingConfirmation = false
+    @State private var showDeleteICloudDataConfirmation = false
 
     private var calendarAccessButtonTitle: String {
         let strings = settings.strings
@@ -2433,6 +2439,20 @@ struct SettingsTabView: View {
             request.requesterMemberID == settings.currentMemberID
                 && request.ownerMemberID == settings.partnerMemberID
         }
+    }
+
+    private var outgoingSharingIdentityValue: String {
+        ICloudSharingIdentityDisplayPlan.displayValue(
+            for: settings.outgoingShareParticipantIDs,
+            emptyValue: settings.strings.noICloudSharingIdentity
+        )
+    }
+
+    private var incomingSharingIdentityValue: String {
+        ICloudSharingIdentityDisplayPlan.displayValue(
+            for: settings.partnerShareOwnerID,
+            emptyValue: settings.strings.noICloudSharingIdentity
+        )
     }
 
     var body: some View {
@@ -2513,8 +2533,8 @@ struct SettingsTabView: View {
             }
 
             Section(strings.iCloudShareSection) {
-                LabeledContent(strings.iCloudOutgoingSharingLabel, value: settings.partnerMemberID)
-                LabeledContent(strings.iCloudIncomingSharingLabel, value: settings.partnerMemberID)
+                LabeledContent(strings.iCloudOutgoingSharingLabel, value: outgoingSharingIdentityValue)
+                LabeledContent(strings.iCloudIncomingSharingLabel, value: incomingSharingIdentityValue)
                 Button(strings.createOrOpenShareButton(isPreparing: isPreparingShare)) {
                     Task { await prepareShare() }
                 }
@@ -2526,7 +2546,14 @@ struct SettingsTabView: View {
                 Button(strings.stopICloudSharingButton, role: .destructive) {
                     showStopSharingConfirmation = true
                 }
-                .disabled(!services.isCloudKitEnabled || isStoppingShare)
+                .disabled(!services.isCloudKitEnabled || isStoppingShare || isDeletingICloudData)
+                Button(
+                    isDeletingICloudData ? strings.deletingICloudDataButton : strings.deleteICloudDataButton,
+                    role: .destructive
+                ) {
+                    showDeleteICloudDataConfirmation = true
+                }
+                .disabled(!services.isCloudKitEnabled || isDeletingICloudData || isStoppingShare)
                 Text(strings.createsICloudShareDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2619,6 +2646,14 @@ struct SettingsTabView: View {
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
             Text(strings.stopICloudSharingConfirmationMessage)
+        }
+        .alert(strings.deleteICloudDataConfirmationTitle, isPresented: $showDeleteICloudDataConfirmation) {
+            Button(strings.deleteICloudDataButton, role: .destructive) {
+                Task { await deleteICloudData() }
+            }
+            Button(strings.cancelButton, role: .cancel) {}
+        } message: {
+            Text(strings.deleteICloudDataConfirmationMessage)
         }
     }
 
@@ -2781,6 +2816,10 @@ struct SettingsTabView: View {
         do {
             let share = try await cloudKit.prepareShare(ownerMemberID: settings.currentMemberID)
             guard activeSharePreparationID == preparationID else { return }
+            settings.iCloudSharingEnabled = true
+            settings.outgoingShareParticipantIDs = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentifiers(
+                from: share.share
+            )
             preparedShare = share
         } catch {
             guard activeSharePreparationID == preparationID else { return }
@@ -2803,8 +2842,47 @@ struct SettingsTabView: View {
         defer { isStoppingShare = false }
 
         do {
+            let localOwnerIDsToPurge = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
+                partnerShareOwnerID: settings.partnerShareOwnerID,
+                legacyPartnerMemberID: settings.partnerMemberID
+            )
             try await cloudKit.stopSharing(ownerMemberID: settings.currentMemberID)
+            try ShareCalLocalDataCleanupService.purgeSharedOwnerMirrors(
+                ownerMemberIDs: localOwnerIDsToPurge,
+                modelContext: modelContext
+            )
+            settings.iCloudSharingEnabled = false
+            settings.partnerShareOwnerID = nil
+            settings.outgoingShareParticipantIDs = []
             errorMessage = settings.strings.stopICloudSharingSucceeded
+        } catch {
+            errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
+        }
+    }
+
+    @MainActor
+    private func deleteICloudData() async {
+        guard !isDeletingICloudData else { return }
+        errorMessage = nil
+        guard let cloudKit = services.cloudKitIfAvailable else {
+            errorMessage = settings.strings.iCloudSharingUnavailableLocalBuild
+            return
+        }
+
+        isDeletingICloudData = true
+        defer { isDeletingICloudData = false }
+
+        do {
+            try await cloudKit.deleteICloudData(ownerMemberID: settings.currentMemberID)
+            try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
+            cloudKitDiagnosticMessage = nil
+            settings.iCloudSharingEnabled = false
+            settings.partnerShareOwnerID = nil
+            settings.outgoingShareParticipantIDs = []
+            settings.lastSyncAt = nil
+            settings.lastSyncError = nil
+            settings.syncPhase = .idle
+            errorMessage = settings.strings.deleteICloudDataSucceeded
         } catch {
             errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
         }

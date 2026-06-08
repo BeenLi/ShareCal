@@ -187,11 +187,11 @@ enum CloudKitSharedDatabaseImportPlan {
         mirrors.filter { $0.ownerMemberID != currentMemberID }
     }
 
-    static func localizedMirrors(_ mirrors: [EventMirror], partnerMemberID: String) -> [EventMirror] {
+    static func identifiedMirrors(_ mirrors: [EventMirror], sharedOwnerID: String) -> [EventMirror] {
         mirrors.map { mirror in
             EventMirror(
                 id: mirror.id,
-                ownerMemberID: partnerMemberID,
+                ownerMemberID: sharedOwnerID,
                 mirrorKey: mirror.mirrorKey,
                 sourceCalendarID: mirror.sourceCalendarID,
                 sourceCalendarTitle: mirror.sourceCalendarTitle,
@@ -258,6 +258,25 @@ enum CloudKitAccessRequestWritePlan {
 enum CloudKitStopSharingPlan {
     static func shareRecordIDToDelete(from rootRecord: CKRecord) -> CKRecord.ID? {
         rootRecord.share?.recordID
+    }
+}
+
+enum CloudKitICloudDataCleanupStep: Equatable {
+    case stopSharing
+    case deletePrivateZone
+}
+
+enum CloudKitICloudDataCleanupPlan {
+    static let steps: [CloudKitICloudDataCleanupStep] = [.stopSharing, .deletePrivateZone]
+
+    static func zoneIDsToDelete(zoneID: CKRecordZone.ID) -> [CKRecordZone.ID] {
+        [zoneID]
+    }
+
+    static func shouldIgnoreZoneDeletionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == CKError.errorDomain
+            && CKError.Code(rawValue: nsError.code) == .unknownItem
     }
 }
 
@@ -710,6 +729,38 @@ struct PreparedCloudShare: Identifiable {
     let container: CKContainer
 }
 
+enum CloudKitShareParticipantIdentityPlan {
+    static func sharedParticipantIdentifiers(from share: CKShare) -> [String] {
+        share.participants
+            .filter { $0.role != .owner }
+            .compactMap(identifier)
+    }
+
+    private static func identifier(for participant: CKShare.Participant) -> String? {
+        let userIdentity = participant.userIdentity
+        if let emailAddress = normalized(userIdentity.lookupInfo?.emailAddress) {
+            return emailAddress
+        }
+        if let phoneNumber = normalized(userIdentity.lookupInfo?.phoneNumber) {
+            return phoneNumber
+        }
+        if let userRecordName = normalized(userIdentity.userRecordID?.recordName) {
+            return userRecordName
+        }
+        if let nameComponents = userIdentity.nameComponents {
+            let name = PersonNameComponentsFormatter.localizedString(from: nameComponents, style: .medium)
+            return normalized(name)
+        }
+        return nil
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+}
+
 private struct ShareRootRecord {
     let record: CKRecord
     let state: CloudKitShareRootState
@@ -981,6 +1032,55 @@ final class CloudKitCoupleSpaceService {
                 throw error
             }
             cloudKitSharingInfo("stopSharing ignored missing share=\(shareRecordID.recordName)")
+        }
+    }
+
+    func fetchOutgoingShareParticipantIDs(ownerMemberID: String) async throws -> [String] {
+        cloudKitSharingInfo("fetchOutgoingShareParticipantIDs begin ownerMemberIDPresent=\((!ownerMemberID.isEmpty).description)")
+        try await ensureZone()
+        let rootRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
+        guard let root = try await fetchRecordIfPresent(with: rootRecordID) else {
+            cloudKitSharingInfo("fetchOutgoingShareParticipantIDs skipped; root missing")
+            return []
+        }
+        root["schemaVersion"] = 1 as CKRecordValue
+        root["ownerMemberID"] = ownerMemberID as CKRecordValue
+
+        guard let shareRecordID = CloudKitStopSharingPlan.shareRecordIDToDelete(from: root) else {
+            cloudKitSharingInfo("fetchOutgoingShareParticipantIDs skipped; share missing")
+            return []
+        }
+
+        let share = try await fetchShare(with: shareRecordID)
+        let participantIDs = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentifiers(from: share)
+        cloudKitSharingInfo("fetchOutgoingShareParticipantIDs succeeded count=\(participantIDs.count)")
+        return participantIDs
+    }
+
+    func deleteICloudData(ownerMemberID: String) async throws {
+        cloudKitSharingInfo("deleteICloudData begin ownerMemberIDPresent=\((!ownerMemberID.isEmpty).description)")
+        for step in CloudKitICloudDataCleanupPlan.steps {
+            switch step {
+            case .stopSharing:
+                try await stopSharing(ownerMemberID: ownerMemberID)
+            case .deletePrivateZone:
+                try await deletePrivateZone()
+            }
+        }
+        cloudKitSharingInfo("deleteICloudData succeeded zone=\(Self.zoneName)")
+    }
+
+    private func deletePrivateZone() async throws {
+        let zoneIDs = CloudKitICloudDataCleanupPlan.zoneIDsToDelete(zoneID: zoneID)
+        do {
+            _ = try await privateDatabase.modifyRecordZones(saving: [], deleting: zoneIDs)
+            cloudKitSharingInfo("deletePrivateZone succeeded zones=\(zoneIDs.map(\.zoneName).joined(separator: ","))")
+        } catch {
+            guard CloudKitICloudDataCleanupPlan.shouldIgnoreZoneDeletionError(error) else {
+                cloudKitSharingError("deletePrivateZone failed zone=\(Self.zoneName) error=\(describeCloudKitFailure(error))")
+                throw error
+            }
+            cloudKitSharingInfo("deletePrivateZone ignored missing zone=\(Self.zoneName)")
         }
     }
 
@@ -1638,16 +1738,26 @@ final class CloudKitCoupleSpaceService {
         }
 
         let query = CKQuery(recordType: EventMirrorRecordMapper.recordType, predicate: NSPredicate(value: true))
-        var records: [CKRecord] = []
+        var mirrors: [EventMirror] = []
         for sharedZoneID in zoneIDs {
             cloudKitSharingInfo("fetchSharedEventMirrors querying zone=\(sharedZoneID.zoneName) owner=\(sharedZoneID.ownerName)")
-            records.append(contentsOf: try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase))
+            let records = try await fetchRecords(matching: query, in: sharedZoneID, database: sharedDatabase)
+            let zoneMirrors = try records.map {
+                try EventMirrorRecordMapper.eventMirror(from: $0)
+            }
+            mirrors.append(contentsOf: CloudKitSharedDatabaseImportPlan.identifiedMirrors(
+                zoneMirrors,
+                sharedOwnerID: sharedZoneID.ownerName
+            ))
         }
 
-        cloudKitSharingInfo("fetchSharedEventMirrors fetched records=\(records.count)")
-        return try records.map {
-            try EventMirrorRecordMapper.eventMirror(from: $0)
-        }
+        cloudKitSharingInfo("fetchSharedEventMirrors fetched records=\(mirrors.count)")
+        return mirrors
+    }
+
+    func fetchSharedOwnerIDs() async throws -> [String] {
+        let zoneIDs = try await sharedCoupleSpaceZoneIDs()
+        return zoneIDs.map(\.ownerName).sorted()
     }
 
     func fetchEventComments() async throws -> [EventComment] {

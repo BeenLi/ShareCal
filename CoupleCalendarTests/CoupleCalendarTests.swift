@@ -1,4 +1,5 @@
 import CloudKit
+import SwiftData
 import UIKit
 import XCTest
 
@@ -400,6 +401,100 @@ final class ShareCalCalendarBootstrapPlanTests: XCTestCase {
     }
 }
 
+final class CalendarMirrorVisibilityPlanTests: XCTestCase {
+    func testShowsOnlyCurrentMemberAndStablePartnerOwnerMirrors() {
+        let current = mirror(owner: "me", key: "current")
+        let sharedOwner = mirror(owner: "icloud-owner", key: "shared-owner")
+        let partnerNickname = mirror(owner: "yoki", key: "partner-nickname")
+        let staleNickname = mirror(owner: "partner", key: "stale-nickname")
+        let stranger = mirror(owner: "someone-else", key: "stranger")
+
+        let visible = CalendarMirrorVisibilityPlan.memberMirrors(
+            [current, sharedOwner, partnerNickname, staleNickname, stranger],
+            currentMemberID: "me",
+            partnerShareOwnerID: "icloud-owner"
+        )
+
+        XCTAssertEqual(visible.map(\.mirrorKey), ["current", "shared-owner"])
+    }
+
+    func testHidesPartnerMirrorsWhenStablePartnerOwnerIsUnknown() {
+        let current = mirror(owner: "me", key: "current")
+        let partnerNickname = mirror(owner: "yoki", key: "partner-nickname")
+
+        let visible = CalendarMirrorVisibilityPlan.memberMirrors(
+            [current, partnerNickname],
+            currentMemberID: "me",
+            partnerShareOwnerID: nil
+        )
+
+        XCTAssertEqual(visible.map(\.mirrorKey), ["current"])
+    }
+
+    private func mirror(owner: String, key: String) -> EventMirror {
+        EventMirror(
+            id: key,
+            ownerMemberID: owner,
+            mirrorKey: key,
+            sourceCalendarID: "calendar",
+            sourceCalendarTitle: "Calendar",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_000),
+            startDate: Date(timeIntervalSince1970: 1_000),
+            endDate: Date(timeIntervalSince1970: 1_800),
+            isAllDay: false,
+            timeZoneIdentifier: "Asia/Singapore",
+            title: key,
+            location: nil,
+            notes: nil,
+            urlString: nil,
+            calendarColorHex: "#FF2D55",
+            visibilityRawValue: EventVisibility.fullDetails.rawValue,
+            deletedAt: nil,
+            cloudKitRecordName: key
+        )
+    }
+}
+
+final class ICloudSharingIdentityDisplayPlanTests: XCTestCase {
+    func testDisplaysStableSharingIdentifiersInsteadOfPartnerNickname() {
+        let value = ICloudSharingIdentityDisplayPlan.displayValue(
+            for: [" partner@example.com ", "partner@example.com", "icloud-owner"],
+            emptyValue: "Not connected"
+        )
+
+        XCTAssertEqual(value, "partner@example.com, icloud-owner")
+    }
+
+    func testDisplaysEmptyValueWhenStableSharingIdentifierIsMissing() {
+        let value = ICloudSharingIdentityDisplayPlan.displayValue(
+            for: [nil, " ", ""].compactMap { $0 },
+            emptyValue: "Not connected"
+        )
+
+        XCTAssertEqual(value, "Not connected")
+    }
+}
+
+final class ICloudSharingTeardownPlanTests: XCTestCase {
+    func testPurgesStableOwnerAndLegacyPartnerNicknameIDs() {
+        let ownerIDs = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
+            partnerShareOwnerID: "icloud-owner",
+            legacyPartnerMemberID: " yoki "
+        )
+
+        XCTAssertEqual(ownerIDs, ["icloud-owner", "partner", "yoki"])
+    }
+
+    func testDoesNotUseEmptyLegacyPartnerNicknameAsOwnerID() {
+        let ownerIDs = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
+            partnerShareOwnerID: nil,
+            legacyPartnerMemberID: " "
+        )
+
+        XCTAssertEqual(ownerIDs, ["partner"])
+    }
+}
+
 final class AppLanguageSettingsTests: XCTestCase {
     func testDefaultsToEnglishWhenNoPreferenceExists() {
         let suiteName = "AppLanguageSettingsTests-\(UUID().uuidString)"
@@ -422,6 +517,7 @@ final class AppLanguageSettingsTests: XCTestCase {
 
         XCTAssertEqual(language, .chinese)
     }
+
 }
 
 final class ShareCalStringsTests: XCTestCase {
@@ -435,7 +531,10 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "Full details")
         XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "Sharing With")
         XCTAssertEqual(strings.iCloudIncomingSharingLabel, "Shared With Me")
+        XCTAssertEqual(strings.noICloudSharingIdentity, "Not connected")
         XCTAssertEqual(strings.stopICloudSharingButton, "Stop Sharing")
+        XCTAssertEqual(strings.deleteICloudDataButton, "Delete iCloud Data")
+        XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud data deleted.")
     }
 
     func testChineseProvidesPrimaryLabels() {
@@ -448,7 +547,10 @@ final class ShareCalStringsTests: XCTestCase {
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "完整详情")
         XCTAssertEqual(strings.iCloudOutgoingSharingLabel, "我正在共享给")
         XCTAssertEqual(strings.iCloudIncomingSharingLabel, "共享给我的日历")
+        XCTAssertEqual(strings.noICloudSharingIdentity, "未连接")
         XCTAssertEqual(strings.stopICloudSharingButton, "停止共享")
+        XCTAssertEqual(strings.deleteICloudDataButton, "删除 iCloud 数据")
+        XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud 数据已删除。")
     }
 }
 
@@ -1011,6 +1113,139 @@ final class CloudKitStopSharingPlanTests: XCTestCase {
 
         XCTAssertEqual(CloudKitStopSharingPlan.shareRecordIDToDelete(from: root), share.recordID)
     }
+
+    func testICloudDataCleanupStopsSharingBeforeDeletingPrivateZone() {
+        XCTAssertEqual(
+            CloudKitICloudDataCleanupPlan.steps,
+            [.stopSharing, .deletePrivateZone]
+        )
+    }
+
+    func testICloudDataCleanupDeletesOnlyCoupleSpacePrivateZone() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
+
+        XCTAssertEqual(CloudKitICloudDataCleanupPlan.zoneIDsToDelete(zoneID: zoneID), [zoneID])
+    }
+
+    func testICloudDataCleanupIgnoresMissingPrivateZone() {
+        let error = NSError(domain: CKError.errorDomain, code: CKError.Code.unknownItem.rawValue)
+
+        XCTAssertTrue(CloudKitICloudDataCleanupPlan.shouldIgnoreZoneDeletionError(error))
+    }
+
+    func testICloudDataCleanupDoesNotIgnorePermissionErrors() {
+        let error = NSError(domain: CKError.errorDomain, code: CKError.Code.permissionFailure.rawValue)
+
+        XCTAssertFalse(CloudKitICloudDataCleanupPlan.shouldIgnoreZoneDeletionError(error))
+    }
+
+    @MainActor
+    func testLocalICloudDataCleanupPurgesCachedShareCalModels() throws {
+        let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
+        let context = ModelContext(container)
+        context.insert(CoupleSpace(ownerMemberID: "me"))
+        context.insert(MemberProfile(id: "profile", displayName: "Me", avatarColorHex: "#FF2D55"))
+        context.insert(cleanupMirror(owner: "partner", key: "partner-event"))
+        context.insert(LocalEventShadow(
+            localEventIdentifier: "event",
+            calendarIdentifier: "calendar",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_000),
+            fingerprint: "fingerprint",
+            cloudKitRecordName: "record",
+            lastUploadedAt: Date(timeIntervalSince1970: 2_000),
+            isTombstone: false
+        ))
+        context.insert(EventComment(
+            eventMirrorID: "partner-event",
+            authorMemberID: "partner",
+            body: "cached",
+            createdAt: Date(timeIntervalSince1970: 3_000)
+        ))
+        context.insert(EventInvitation(
+            creatorMemberID: "me",
+            inviteeMemberID: "partner",
+            title: "Invite",
+            startDate: Date(timeIntervalSince1970: 4_000),
+            endDate: Date(timeIntervalSince1970: 5_000),
+            location: nil,
+            notes: nil
+        ))
+        context.insert(CalendarAccessRequest(
+            requesterMemberID: "partner",
+            ownerMemberID: "me",
+            requestedStartDate: Date(timeIntervalSince1970: 6_000),
+            requestedEndDate: Date(timeIntervalSince1970: 7_000)
+        ))
+        context.insert(SyncState(lastSyncAt: Date(timeIntervalSince1970: 8_000)))
+        try context.save()
+
+        try ShareCalLocalDataCleanupService.purge(modelContext: context)
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<CoupleSpace>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<EventMirror>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<LocalEventShadow>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<EventComment>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<EventInvitation>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<CalendarAccessRequest>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<SyncState>()).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<MemberProfile>()).count, 1)
+    }
+
+    @MainActor
+    func testSharedOwnerCleanupPurgesStableAndLegacyPartnerMirrorsOnly() throws {
+        let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
+        let context = ModelContext(container)
+        context.insert(cleanupMirror(owner: "me", key: "mine"))
+        context.insert(cleanupMirror(owner: "icloud-owner", key: "stable-partner"))
+        context.insert(cleanupMirror(owner: "partner", key: "legacy-partner"))
+        context.insert(cleanupMirror(owner: "someone-else", key: "stranger"))
+        context.insert(EventComment(
+            eventMirrorID: "stable-partner",
+            authorMemberID: "icloud-owner",
+            body: "cached",
+            createdAt: Date(timeIntervalSince1970: 3_000)
+        ))
+        context.insert(EventComment(
+            eventMirrorID: "mine",
+            authorMemberID: "me",
+            body: "keep",
+            createdAt: Date(timeIntervalSince1970: 4_000)
+        ))
+        try context.save()
+
+        try ShareCalLocalDataCleanupService.purgeSharedOwnerMirrors(
+            ownerMemberIDs: ["icloud-owner", "partner"],
+            modelContext: context
+        )
+
+        let remainingMirrors = try context.fetch(FetchDescriptor<EventMirror>()).map(\.mirrorKey).sorted()
+        let remainingComments = try context.fetch(FetchDescriptor<EventComment>()).map(\.body).sorted()
+        XCTAssertEqual(remainingMirrors, ["mine", "stranger"])
+        XCTAssertEqual(remainingComments, ["keep"])
+    }
+
+    private func cleanupMirror(owner: String, key: String) -> EventMirror {
+        EventMirror(
+            id: key,
+            ownerMemberID: owner,
+            mirrorKey: key,
+            sourceCalendarID: "calendar",
+            sourceCalendarTitle: "Calendar",
+            occurrenceStartDate: Date(timeIntervalSince1970: 1_000),
+            startDate: Date(timeIntervalSince1970: 1_000),
+            endDate: Date(timeIntervalSince1970: 1_800),
+            isAllDay: false,
+            timeZoneIdentifier: "Asia/Singapore",
+            title: key,
+            location: nil,
+            notes: nil,
+            urlString: nil,
+            calendarColorHex: "#FF2D55",
+            visibilityRawValue: EventVisibility.fullDetails.rawValue,
+            deletedAt: nil,
+            cloudKitRecordName: key
+        )
+    }
 }
 
 final class CloudKitCommentWritePlanTests: XCTestCase {
@@ -1305,13 +1540,13 @@ final class CloudKitSharedDatabaseImportPlanTests: XCTestCase {
             cloudKitRecordName: "second"
         )
 
-        let localized = CloudKitSharedDatabaseImportPlan.localizedMirrors(
+        let localized = CloudKitSharedDatabaseImportPlan.identifiedMirrors(
             [first, second],
-            partnerMemberID: "partner"
+            sharedOwnerID: "icloud-owner"
         )
 
         XCTAssertEqual(localized.map(\.mirrorKey), ["first", "second"])
-        XCTAssertEqual(localized.map(\.ownerMemberID), ["partner", "partner"])
+        XCTAssertEqual(localized.map(\.ownerMemberID), ["icloud-owner", "icloud-owner"])
         XCTAssertEqual(localized.map(\.cloudKitRecordName), ["first", "second"])
     }
 }

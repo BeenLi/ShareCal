@@ -10,6 +10,15 @@ final class SettingsStore {
     var partnerMemberID: String {
         didSet { defaults.set(partnerMemberID, forKey: Key.partnerMemberID) }
     }
+    var partnerShareOwnerID: String? {
+        didSet { saveOptionalString(partnerShareOwnerID, forKey: Key.partnerShareOwnerID) }
+    }
+    var outgoingShareParticipantIDs: [String] {
+        didSet { defaults.set(outgoingShareParticipantIDs, forKey: Key.outgoingShareParticipantIDs) }
+    }
+    var iCloudSharingEnabled: Bool {
+        didSet { defaults.set(iCloudSharingEnabled, forKey: Key.iCloudSharingEnabled) }
+    }
     var selectedCalendarIDs: Set<String> {
         didSet { saveSelectedCalendarIDs() }
     }
@@ -31,6 +40,9 @@ final class SettingsStore {
         self.defaults = defaults
         currentMemberID = defaults.string(forKey: Key.currentMemberID) ?? "me"
         partnerMemberID = defaults.string(forKey: Key.partnerMemberID) ?? "partner"
+        partnerShareOwnerID = defaults.string(forKey: Key.partnerShareOwnerID)
+        outgoingShareParticipantIDs = defaults.stringArray(forKey: Key.outgoingShareParticipantIDs) ?? []
+        iCloudSharingEnabled = defaults.object(forKey: Key.iCloudSharingEnabled) as? Bool ?? true
         selectedCalendarIDs = Set(defaults.stringArray(forKey: Key.selectedCalendarIDs) ?? [])
         defaultVisibility = EventVisibility(rawValue: defaults.string(forKey: Key.defaultVisibility) ?? "") ?? .fullDetails
         appLanguage = AppLanguagePreference.read(from: defaults)
@@ -49,9 +61,20 @@ final class SettingsStore {
         defaults.set(Array(selectedCalendarIDs).sorted(), forKey: Key.selectedCalendarIDs)
     }
 
+    private func saveOptionalString(_ value: String?, forKey key: String) {
+        if let value {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     private enum Key {
         static let currentMemberID = "currentMemberID"
         static let partnerMemberID = "partnerMemberID"
+        static let partnerShareOwnerID = "partnerShareOwnerID"
+        static let outgoingShareParticipantIDs = "outgoingShareParticipantIDs"
+        static let iCloudSharingEnabled = "iCloudSharingEnabled"
         static let selectedCalendarIDs = "selectedCalendarIDs"
         static let defaultVisibility = "defaultVisibility"
         static let lastSyncAt = "lastSyncAt"
@@ -206,7 +229,7 @@ struct SyncCoordinator {
             if !canceledInvitations.isEmpty {
                 try modelContext.save()
             }
-            if let cloudKit {
+            if let cloudKit, settings.iCloudSharingEnabled {
                 try await cloudKit.ensureShareRoot(ownerMemberID: settings.currentMemberID)
                 try await cloudKit.saveMirrorsForSync(mirrorsForSync)
                 try await cloudKit.deleteMirrorsForSync(hardDeletedMirrors)
@@ -214,25 +237,38 @@ struct SyncCoordinator {
                     try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
                 }
                 try await cloudKit.foregroundSync()
+                settings.outgoingShareParticipantIDs = try await cloudKit.fetchOutgoingShareParticipantIDs(
+                    ownerMemberID: settings.currentMemberID
+                )
                 let cloudAccessRequests = try await cloudKit.fetchCalendarAccessRequests()
                 try upsert(accessRequests: cloudAccessRequests, modelContext: modelContext)
+                let previousPartnerShareOwnerID = settings.partnerShareOwnerID
+                let sharedOwnerIDs = try await cloudKit.fetchSharedOwnerIDs()
+                let partnerShareOwnerID = sharedOwnerIDs.first
+                settings.partnerShareOwnerID = partnerShareOwnerID
                 let sharedMirrors = try await cloudKit.fetchSharedEventMirrors()
-                let importableSharedMirrors = CloudKitSharedDatabaseImportPlan.localizedMirrors(
+                let importableSharedMirrors = CloudKitSharedDatabaseImportPlan.importableMirrors(
                     sharedMirrors,
-                    partnerMemberID: settings.partnerMemberID
+                    currentMemberID: settings.currentMemberID
                 )
-                try purgeStalePartnerMirrors(
-                    importedMirrors: importableSharedMirrors,
-                    partnerMemberID: settings.partnerMemberID,
-                    modelContext: modelContext
-                )
+                let ownerIDsToPurge = Set([previousPartnerShareOwnerID, partnerShareOwnerID].compactMap { $0 })
+                for ownerID in ownerIDsToPurge {
+                    try purgeStalePartnerMirrors(
+                        importedMirrors: ownerID == partnerShareOwnerID ? importableSharedMirrors : [],
+                        partnerShareOwnerID: ownerID,
+                        modelContext: modelContext
+                    )
+                }
                 try upsert(mirrors: importableSharedMirrors, modelContext: modelContext)
                 let cloudComments = try await cloudKit.fetchEventComments()
                 try upsert(comments: cloudComments, modelContext: modelContext)
                 let cloudInvitations = try await cloudKit.fetchEventInvitations()
                 try upsert(invitations: cloudInvitations, modelContext: modelContext)
-            } else {
+            } else if cloudKit == nil {
                 settings.lastSyncError = settings.strings.cloudKitSyncDisabledLocalBuild
+            } else {
+                settings.partnerShareOwnerID = nil
+                settings.outgoingShareParticipantIDs = []
             }
             try purge(mirrors: hardDeletedMirrors, modelContext: modelContext)
             try purgeShadows(mirrorKeys: hardDeletedMirrorKeys, modelContext: modelContext)
@@ -401,13 +437,13 @@ struct SyncCoordinator {
 
     private func purgeStalePartnerMirrors(
         importedMirrors: [EventMirror],
-        partnerMemberID: String,
+        partnerShareOwnerID: String,
         modelContext: ModelContext
     ) throws {
         let importedMirrorKeys = Set(importedMirrors.map(\.mirrorKey))
         let existingMirrors = try modelContext.fetch(FetchDescriptor<EventMirror>())
         for mirror in existingMirrors
-            where mirror.ownerMemberID == partnerMemberID
+            where mirror.ownerMemberID == partnerShareOwnerID
                 && !importedMirrorKeys.contains(mirror.mirrorKey) {
             modelContext.delete(mirror)
         }

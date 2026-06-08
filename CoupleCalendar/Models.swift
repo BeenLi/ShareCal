@@ -117,6 +117,7 @@ struct ShareCalStrings {
     var iCloudShareSection: String { text("iCloud Share", "iCloud 共享") }
     var iCloudOutgoingSharingLabel: String { text("Sharing With", "我正在共享给") }
     var iCloudIncomingSharingLabel: String { text("Shared With Me", "共享给我的日历") }
+    var noICloudSharingIdentity: String { text("Not connected", "未连接") }
     var accessRequestSection: String { text("History Requests", "历史日程申请") }
     var requestHistoryAccessButton: String { text("Request History Access", "申请查看历史日程") }
     var accessRequestStartLabel: String { text("Start", "开始") }
@@ -138,6 +139,16 @@ struct ShareCalStrings {
         )
     }
     var stopICloudSharingSucceeded: String { text("Sharing stopped.", "已停止共享。") }
+    var deleteICloudDataButton: String { text("Delete iCloud Data", "删除 iCloud 数据") }
+    var deletingICloudDataButton: String { text("Deleting iCloud Data...", "正在删除 iCloud 数据...") }
+    var deleteICloudDataConfirmationTitle: String { text("Delete iCloud Data?", "删除 iCloud 数据？") }
+    var deleteICloudDataConfirmationMessage: String {
+        text(
+            "This stops sharing, deletes ShareCal's private iCloud data, and cannot be undone.",
+            "这会停止共享并删除 ShareCal 的 iCloud 私有数据，且无法撤销。"
+        )
+    }
+    var deleteICloudDataSucceeded: String { text("iCloud data deleted.", "iCloud 数据已删除。") }
     var createsICloudShareDescription: String {
         text("Creates an iCloud share for your partner.", "为对方创建 iCloud 共享。")
     }
@@ -633,6 +644,54 @@ enum CalendarSharingWindowPlan {
     }
 }
 
+enum CalendarMirrorVisibilityPlan {
+    static func memberMirrors(
+        _ mirrors: [EventMirror],
+        currentMemberID: String,
+        partnerShareOwnerID: String?
+    ) -> [EventMirror] {
+        mirrors.filter { mirror in
+            mirror.ownerMemberID == currentMemberID || mirror.ownerMemberID == partnerShareOwnerID
+        }
+    }
+}
+
+enum ICloudSharingIdentityDisplayPlan {
+    static func displayValue(for identifiers: [String], emptyValue: String) -> String {
+        let normalizedIdentifiers = identifiers
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var seenIdentifiers = Set<String>()
+        let uniqueIdentifiers = normalizedIdentifiers.filter { seenIdentifiers.insert($0).inserted }
+        guard !uniqueIdentifiers.isEmpty else { return emptyValue }
+        return uniqueIdentifiers.joined(separator: ", ")
+    }
+
+    static func displayValue(for identifier: String?, emptyValue: String) -> String {
+        displayValue(for: [identifier].compactMap { $0 }, emptyValue: emptyValue)
+    }
+}
+
+enum ICloudSharingTeardownPlan {
+    static func localOwnerIDsToPurge(
+        partnerShareOwnerID: String?,
+        legacyPartnerMemberID: String
+    ) -> Set<String> {
+        var ownerIDs = Set([partnerShareOwnerID].compactMap { normalizedID($0) })
+        if let legacyID = normalizedID(legacyPartnerMemberID) {
+            ownerIDs.insert(legacyID)
+        }
+        ownerIDs.insert("partner")
+        return ownerIDs
+    }
+
+    private static func normalizedID(_ id: String?) -> String? {
+        guard let id else { return nil }
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedID.isEmpty ? nil : trimmedID
+    }
+}
+
 enum SyncPhase: String {
     case idle
     case syncing
@@ -1040,6 +1099,53 @@ final class SyncState {
         self.lastSyncAt = lastSyncAt
         self.lastErrorMessage = lastErrorMessage
         self.pendingMutationCount = pendingMutationCount
+    }
+}
+
+@MainActor
+enum ShareCalLocalDataCleanupService {
+    static func purge(modelContext: ModelContext) throws {
+        try deleteAll(CoupleSpace.self, modelContext: modelContext)
+        try deleteAll(EventMirror.self, modelContext: modelContext)
+        try deleteAll(LocalEventShadow.self, modelContext: modelContext)
+        try deleteAll(EventComment.self, modelContext: modelContext)
+        try deleteAll(EventInvitation.self, modelContext: modelContext)
+        try deleteAll(CalendarAccessRequest.self, modelContext: modelContext)
+        try deleteAll(SyncState.self, modelContext: modelContext)
+        try modelContext.save()
+    }
+
+    static func purgeSharedOwnerMirrors(
+        ownerMemberIDs: Set<String>,
+        modelContext: ModelContext
+    ) throws {
+        guard !ownerMemberIDs.isEmpty else { return }
+
+        let existingMirrors = try modelContext.fetch(FetchDescriptor<EventMirror>())
+        var deletedMirrorIDs = Set<String>()
+        for mirror in existingMirrors where ownerMemberIDs.contains(mirror.ownerMemberID) {
+            deletedMirrorIDs.insert(mirror.id)
+            modelContext.delete(mirror)
+        }
+
+        if !deletedMirrorIDs.isEmpty {
+            let existingComments = try modelContext.fetch(FetchDescriptor<EventComment>())
+            for comment in existingComments where deletedMirrorIDs.contains(comment.eventMirrorID) {
+                modelContext.delete(comment)
+            }
+        }
+
+        try modelContext.save()
+    }
+
+    private static func deleteAll<Model: PersistentModel>(
+        _ modelType: Model.Type,
+        modelContext: ModelContext
+    ) throws {
+        let models = try modelContext.fetch(FetchDescriptor<Model>())
+        for model in models {
+            modelContext.delete(model)
+        }
     }
 }
 
