@@ -2603,9 +2603,37 @@ final class CloudKitCoupleSpaceService {
         let zoneIDs = try await sharedCoupleSpaceZoneIDs()
             .filter { ownerIDSet.contains($0.ownerName) }
         guard !zoneIDs.isEmpty else { return }
+
+        // A participant leaves a share by deleting its CKShare record from the
+        // shared database. Deleting only the zone leaves the membership intact,
+        // so CloudKit re-syncs the owner's zone back and it reappears as a newly
+        // discovered shared calendar.
+        let rootRecordIDsByZone = zoneIDs.reduce(into: [CKRecordZone.ID: CKRecord.ID]()) { result, zoneID in
+            result[zoneID] = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
+        }
+        let rootRecordsByID = try await fetchRecordsForUpsertIfPresent(
+            with: Array(rootRecordIDsByZone.values),
+            database: sharedDatabase
+        )
+        let shareRecordIDs = zoneIDs.compactMap { zoneID -> CKRecord.ID? in
+            guard let rootRecordID = rootRecordIDsByZone[zoneID],
+                  let rootRecord = rootRecordsByID[rootRecordID] else { return nil }
+            return CloudKitStopSharingPlan.shareRecordIDToDelete(from: rootRecord)
+        }
+
         do {
-            _ = try await sharedDatabase.modifyRecordZones(saving: [], deleting: zoneIDs)
-            cloudKitSharingInfo("deleteAcceptedSharedZones succeeded owners=\(ownerIDSet.sorted().joined(separator: ","))")
+            if !shareRecordIDs.isEmpty {
+                _ = try await modifyRecords(
+                    saving: [],
+                    deleting: shareRecordIDs,
+                    savePolicy: .changedKeys,
+                    atomically: false,
+                    database: sharedDatabase
+                )
+            }
+            // Best-effort cleanup of the now membership-less zone from the shared cache.
+            _ = try? await sharedDatabase.modifyRecordZones(saving: [], deleting: zoneIDs)
+            cloudKitSharingInfo("deleteAcceptedSharedZones left shares owners=\(ownerIDSet.sorted().joined(separator: ",")) shares=\(shareRecordIDs.count) zones=\(zoneIDs.count)")
         } catch {
             cloudKitSharingError("deleteAcceptedSharedZones failed owners=\(ownerIDSet.sorted().joined(separator: ",")) error=\(describeCloudKitFailure(error))")
             throw error
