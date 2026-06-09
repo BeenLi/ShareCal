@@ -26,6 +26,23 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @MainActor
+enum ShareCalUITestLaunchPlan {
+    static let resetUserDefaultsArgument = "--sharecal-reset-user-defaults"
+
+    static func resetUserDefaultsIfRequested(
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        defaults: UserDefaults = .standard,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) {
+        guard arguments.contains(resetUserDefaultsArgument),
+              let bundleIdentifier else {
+            return
+        }
+        defaults.removePersistentDomain(forName: bundleIdentifier)
+    }
+}
+
+@MainActor
 enum ShareCalLaunchDiagnostics {
     static func runIfRequested(
         services: AppServices,
@@ -67,7 +84,7 @@ enum ShareCalLaunchDiagnostics {
 @main
 struct CoupleCalendarApp: App {
     @UIApplicationDelegateAdaptor(ShareCalAppDelegate.self) private var appDelegate
-    @State private var settings = SettingsStore()
+    @State private var settings: SettingsStore
     @State private var services = AppServices()
 
     private let modelContainer: ModelContainer = {
@@ -77,6 +94,11 @@ struct CoupleCalendarApp: App {
             fatalError("Unable to create SwiftData container: \(error)")
         }
     }()
+
+    init() {
+        ShareCalUITestLaunchPlan.resetUserDefaultsIfRequested()
+        _settings = State(initialValue: SettingsStore())
+    }
 
     var body: some Scene {
         WindowGroup {

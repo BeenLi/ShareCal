@@ -1295,6 +1295,13 @@ struct CloudKitShareParticipantIdentitySnapshot: Equatable {
     let emailAddresses: [String]
 }
 
+struct CloudKitShareParticipantIdentity: Equatable {
+    let role: CKShare.ParticipantRole
+    let acceptanceStatus: CKShare.ParticipantAcceptanceStatus
+    let identifier: String?
+    let emailAddress: String?
+}
+
 enum CloudKitShareParticipantIdentityPlan {
     static func sharedParticipantIdentifiers(from share: CKShare) -> [String] {
         sharedParticipantIdentitySnapshot(from: share).identifiers
@@ -1305,10 +1312,27 @@ enum CloudKitShareParticipantIdentityPlan {
     }
 
     static func sharedParticipantIdentitySnapshot(from share: CKShare) -> CloudKitShareParticipantIdentitySnapshot {
-        let participants = share.participants.filter { $0.role != .owner }
+        sharedParticipantIdentitySnapshot(
+            from: share.participants.map { participant in
+                CloudKitShareParticipantIdentity(
+                    role: participant.role,
+                    acceptanceStatus: participant.acceptanceStatus,
+                    identifier: identifier(for: participant),
+                    emailAddress: emailAddress(for: participant.userIdentity)
+                )
+            }
+        )
+    }
+
+    static func sharedParticipantIdentitySnapshot(
+        from participants: [CloudKitShareParticipantIdentity]
+    ) -> CloudKitShareParticipantIdentitySnapshot {
+        let acceptedParticipants = participants.filter {
+            $0.role != .owner && $0.acceptanceStatus == .accepted
+        }
         return CloudKitShareParticipantIdentitySnapshot(
-            identifiers: unique(participants.compactMap(identifier)),
-            emailAddresses: unique(participants.compactMap { emailAddress(for: $0.userIdentity) })
+            identifiers: unique(acceptedParticipants.compactMap(\.identifier)),
+            emailAddresses: unique(acceptedParticipants.compactMap(\.emailAddress))
         )
     }
 
@@ -1636,6 +1660,42 @@ final class CloudKitCoupleSpaceService {
         try await fetchOutgoingShareParticipantIdentitySnapshot(ownerMemberID: ownerMemberID).identifiers
     }
 
+    func existingICloudDataSnapshot() async -> ExistingICloudDataSnapshot {
+        var lookupFailed = false
+        let privateZoneExists = await privateCoupleSpaceZoneExists(lookupFailed: &lookupFailed)
+        var hasPrivateZoneData = false
+        var hasOutgoingShare = false
+        if privateZoneExists {
+            let rootRecordID = CloudKitShareHierarchyPlan.rootRecordID(zoneID: zoneID)
+            do {
+                let rootRecord = try await fetchRecordForUpsertIfPresent(
+                    with: rootRecordID,
+                    database: privateDatabase
+                )
+                hasOutgoingShare = rootRecord?.share != nil
+                hasPrivateZoneData = rootRecord != nil
+            } catch {
+                cloudKitSharingError("existingICloudDataSnapshot root lookup failed error=\(describeCloudKitFailure(error))")
+                lookupFailed = true
+            }
+        }
+
+        var acceptedSharedZoneCount = 0
+        do {
+            acceptedSharedZoneCount = try await fetchSharedCoupleSpaceZoneIDs().count
+        } catch {
+            cloudKitSharingError("existingICloudDataSnapshot shared zone lookup failed error=\(describeCloudKitFailure(error))")
+            lookupFailed = true
+        }
+
+        return ExistingICloudDataSnapshot(
+            hasPrivateZoneData: hasPrivateZoneData,
+            hasOutgoingShare: hasOutgoingShare,
+            acceptedSharedZoneCount: acceptedSharedZoneCount,
+            lookupFailed: lookupFailed
+        )
+    }
+
     func fetchOutgoingShareParticipantIdentitySnapshot(ownerMemberID: String) async throws -> CloudKitShareParticipantIdentitySnapshot {
         cloudKitSharingInfo("fetchOutgoingShareParticipantIDs begin ownerMemberIDPresent=\((!ownerMemberID.isEmpty).description)")
         try await ensureZone()
@@ -1683,6 +1743,24 @@ final class CloudKitCoupleSpaceService {
             }
             cloudKitSharingInfo("deletePrivateZone ignored missing zone=\(Self.zoneName)")
         }
+    }
+
+    private func privateCoupleSpaceZoneExists(lookupFailed: inout Bool) async -> Bool {
+        var didFail = false
+        let result: Bool = await withCheckedContinuation { continuation in
+            privateDatabase.fetchAllRecordZones { zones, error in
+                if let error {
+                    cloudKitSharingError("privateCoupleSpaceZoneExists failed error=\(describeCloudKitFailure(error))")
+                    didFail = true
+                    continuation.resume(returning: false)
+                    return
+                }
+                let hasCoupleSpaceZone = zones?.contains { $0.zoneID.zoneName == Self.zoneName } ?? false
+                continuation.resume(returning: hasCoupleSpaceZone)
+            }
+        }
+        if didFail { lookupFailed = true }
+        return result
     }
 
     @discardableResult
@@ -2324,7 +2402,7 @@ final class CloudKitCoupleSpaceService {
         )
         var records: [CKRecord] = []
         for request in requests {
-            let recordName = request.cloudKitRecordName ?? request.id
+            let recordName = CalendarAccessRequestRecordMapper.recordName(for: request)
             let recordID = CKRecord.ID(recordName: recordName, zoneID: targetZoneID)
             records.append(
                 CalendarAccessRequestRecordMapper.record(
@@ -2870,6 +2948,7 @@ final class CloudKitCoupleSpaceService {
 struct CloudSharingController: UIViewControllerRepresentable {
     let preparedShare: PreparedCloudShare
     let onError: (String) -> Void
+    let onStoppedSharing: () -> Void
 
     func makeUIViewController(context: Context) -> UICloudSharingController {
         cloudKitSharingInfo("CloudSharingController presenting active share=\(preparedShare.share.recordID.recordName)")
@@ -2882,19 +2961,29 @@ struct CloudSharingController: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onError: onError)
+        Coordinator(onError: onError, onStoppedSharing: onStoppedSharing)
     }
 
     final class Coordinator: NSObject, UICloudSharingControllerDelegate {
         let onError: (String) -> Void
+        let onStoppedSharing: () -> Void
 
-        init(onError: @escaping (String) -> Void) {
+        init(
+            onError: @escaping (String) -> Void,
+            onStoppedSharing: @escaping () -> Void
+        ) {
             self.onError = onError
+            self.onStoppedSharing = onStoppedSharing
         }
 
         func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {
             cloudKitSharingError("UICloudSharingController delegate failedToSaveShare error=\(describeCloudKitFailure(error))")
             onError(CloudKitSharingFailureMessage.userFacingMessage(for: error))
+        }
+
+        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
+            cloudKitSharingInfo("UICloudSharingController delegate didStopSharing")
+            onStoppedSharing()
         }
 
         func itemTitle(for csc: UICloudSharingController) -> String? {

@@ -616,7 +616,10 @@ final class CalendarAccessRequestListPlanTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            CalendarAccessRequestListPlan.pendingIncoming([incoming, acceptedSharedCopy, localOutgoing]).map(\.id),
+            CalendarAccessRequestListPlan.pendingIncoming(
+                [incoming, acceptedSharedCopy, localOutgoing],
+                currentMemberID: "me"
+            ).map(\.id),
             ["incoming"]
         )
         XCTAssertEqual(
@@ -709,7 +712,10 @@ final class CalendarAccessRequestListPlanTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            CalendarAccessRequestListPlan.pendingIncoming([stalePendingIncoming, approvedIncoming]).map(\.id),
+            CalendarAccessRequestListPlan.pendingIncoming(
+                [stalePendingIncoming, approvedIncoming],
+                currentMemberID: "_manuOwner"
+            ).map(\.id),
             []
         )
         XCTAssertEqual(
@@ -773,7 +779,10 @@ final class CalendarAccessRequestListPlanTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            CalendarAccessRequestListPlan.pendingIncoming([olderDeclinedIncoming, newerPendingIncoming]).map(\.id),
+            CalendarAccessRequestListPlan.pendingIncoming(
+                [olderDeclinedIncoming, newerPendingIncoming],
+                currentMemberID: "_manuOwner"
+            ).map(\.id),
             ["newer-pending-incoming"]
         )
         XCTAssertEqual(
@@ -789,6 +798,44 @@ final class CalendarAccessRequestListPlanTests: XCTestCase {
                 currentMemberID: "xiaoyugan"
             ).map(\.id),
             ["newer-pending-outgoing"]
+        )
+    }
+
+    func testIgnoresIncomingRequestsForOldLocalOwnerID() {
+        let rangeStart = Date(timeIntervalSince1970: 10_000)
+        let currentIncoming = CalendarAccessRequest(
+            id: "current-incoming",
+            requesterMemberID: "partner",
+            ownerMemberID: "_currentOwner",
+            requestedStartDate: rangeStart,
+            requestedEndDate: rangeStart.addingTimeInterval(24 * 60 * 60),
+            statusRawValue: CalendarAccessRequestStatus.pending.rawValue,
+            sourceRawValue: CalendarAccessRequestSource.privateOwnerZone.rawValue
+        )
+        let staleIncoming = CalendarAccessRequest(
+            id: "stale-incoming",
+            requesterMemberID: "partner",
+            ownerMemberID: "_oldOwner",
+            requestedStartDate: rangeStart.addingTimeInterval(24 * 60 * 60),
+            requestedEndDate: rangeStart.addingTimeInterval(2 * 24 * 60 * 60),
+            statusRawValue: CalendarAccessRequestStatus.pending.rawValue,
+            sourceRawValue: CalendarAccessRequestSource.privateOwnerZone.rawValue
+        )
+
+        XCTAssertEqual(
+            CalendarAccessRequestListPlan.pendingIncoming(
+                [currentIncoming, staleIncoming],
+                currentMemberID: "_currentOwner"
+            ).map(\.id),
+            ["current-incoming"]
+        )
+        XCTAssertEqual(
+            PendingActionBadgePlan.count(
+                invitations: [],
+                accessRequests: [currentIncoming, staleIncoming],
+                currentMemberID: "_currentOwner"
+            ),
+            1
         )
     }
 }
@@ -850,12 +897,16 @@ final class CalendarMirrorVisibilityPlanTests: XCTestCase {
         XCTAssertEqual(visible.map(\.mirrorKey), ["current"])
     }
 
-    private func mirror(owner: String, key: String) -> EventMirror {
+    private func mirror(
+        owner: String,
+        key: String,
+        sourceCalendarID: String = "calendar"
+    ) -> EventMirror {
         EventMirror(
             id: key,
             ownerMemberID: owner,
             mirrorKey: key,
-            sourceCalendarID: "calendar",
+            sourceCalendarID: sourceCalendarID,
             sourceCalendarTitle: "Calendar",
             occurrenceStartDate: Date(timeIntervalSince1970: 1_000),
             startDate: Date(timeIntervalSince1970: 1_000),
@@ -871,6 +922,70 @@ final class CalendarMirrorVisibilityPlanTests: XCTestCase {
             deletedAt: nil,
             cloudKitRecordName: key
         )
+    }
+}
+
+final class CalendarSetupGuidancePlanTests: XCTestCase {
+    func testHidesGuidanceUntilInitialProfileIsComplete() {
+        XCTAssertNil(CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: false,
+            currentDisplayName: "",
+            authorizationState: .notDetermined,
+            selectedCalendarIDs: [],
+            pairingStatus: .notPaired
+        ))
+    }
+
+    func testShowsCalendarAccessGuidanceWhenCalendarPermissionIsMissing() {
+        XCTAssertEqual(CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: true,
+            currentDisplayName: "Yoki",
+            authorizationState: .notDetermined,
+            selectedCalendarIDs: ["work"],
+            pairingStatus: .notPaired
+        ), .calendarAccess)
+    }
+
+    func testShowsCalendarAccessGuidanceWhenNoCalendarsAreSelected() {
+        XCTAssertEqual(CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: true,
+            currentDisplayName: "Yoki",
+            authorizationState: .fullAccess,
+            selectedCalendarIDs: [],
+            pairingStatus: .notPaired
+        ), .calendarAccess)
+    }
+
+    func testShowsPairingGuidanceAfterCalendarSetupBeforePairingStarts() {
+        XCTAssertEqual(CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: true,
+            currentDisplayName: "Yoki",
+            authorizationState: .fullAccess,
+            selectedCalendarIDs: ["work"],
+            pairingStatus: .notPaired
+        ), .pairing)
+    }
+
+    func testShowsPairingGuidanceWhenWaitingForYouToShareBack() {
+        XCTAssertEqual(CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: true,
+            currentDisplayName: "Yoki",
+            authorizationState: .fullAccess,
+            selectedCalendarIDs: ["work"],
+            pairingStatus: .waitingForYouToShare
+        ), .pairing)
+    }
+
+    func testHidesGuidanceAfterOutgoingPairingStartsOrCompletes() {
+        for status in [PairingStatus.waitingForPartner, .waitingForPartnerToShare, .paired] {
+            XCTAssertNil(CalendarSetupGuidancePlan.step(
+                hasCompletedInitialProfilePrompt: true,
+                currentDisplayName: "Yoki",
+                authorizationState: .fullAccess,
+                selectedCalendarIDs: ["work"],
+                pairingStatus: status
+            ))
+        }
     }
 }
 
@@ -1056,10 +1171,59 @@ final class PairingSettingsPlanTests: XCTestCase {
         )
     }
 
+    func testPartnerStatusDisplayNameShowsNicknameWithOptionalNote() {
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerStatusDisplayName(
+                partnerNoteName: " Home ",
+                partnerSyncedDisplayName: " Yoki ",
+                partnerICloudIdentity: "partner@icloud.com",
+                fallback: "Partner",
+                language: .english
+            ),
+            "Yoki (Home)"
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerStatusDisplayName(
+                partnerNoteName: " ",
+                partnerSyncedDisplayName: " Yoki ",
+                partnerICloudIdentity: "partner@icloud.com",
+                fallback: "Partner",
+                language: .chinese
+            ),
+            "Yoki"
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerStatusDisplayName(
+                partnerNoteName: " Yoki ",
+                partnerSyncedDisplayName: "Yoki",
+                partnerICloudIdentity: "partner@icloud.com",
+                fallback: "Partner",
+                language: .chinese
+            ),
+            "Yoki"
+        )
+        XCTAssertEqual(
+            PairingSettingsPlan.partnerStatusDisplayName(
+                partnerNoteName: " 宝宝 ",
+                partnerSyncedDisplayName: nil,
+                partnerICloudIdentity: "Not connected",
+                fallback: "对方",
+                language: .chinese
+            ),
+            "对方（宝宝）"
+        )
+    }
+
     func testNormalizesCurrentDisplayNameForProfileSync() {
         XCTAssertEqual(PairingSettingsPlan.normalizedDisplayName(" Manu "), "Manu")
         XCTAssertNil(PairingSettingsPlan.normalizedDisplayName(" "))
         XCTAssertNil(PairingSettingsPlan.normalizedDisplayName(nil))
+    }
+
+    func testRandomNicknameIsReadableAndStableLength() {
+        let nickname = PairingSettingsPlan.randomDisplayName(randomNumber: { 42 })
+
+        XCTAssertEqual(nickname, "ShareCal 0042")
     }
 }
 
@@ -1296,6 +1460,168 @@ final class OldSharedCalendarsCleanupPromptPlanTests: XCTestCase {
     }
 }
 
+final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
+    func testPromptsWhenFreshLocalStateFindsExistingCloudDataAfterProfileSetup() {
+        XCTAssertTrue(
+            ExistingICloudDataRecoveryPlan.shouldPresent(
+                snapshot: ExistingICloudDataSnapshot(
+                    hasPrivateZoneData: true,
+                    hasOutgoingShare: true,
+                    acceptedSharedZoneCount: 1
+                ),
+                hasCompletedInitialProfilePrompt: true,
+                hasResolvedPrompt: false,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                pairingID: nil,
+                inactiveSharedOwnerIDs: [],
+                lastSyncAt: nil
+            )
+        )
+    }
+
+    func testDoesNotPromptWhenNoExistingCloudDataIsFound() {
+        XCTAssertFalse(
+            ExistingICloudDataRecoveryPlan.shouldPresent(
+                snapshot: ExistingICloudDataSnapshot(
+                    hasPrivateZoneData: false,
+                    hasOutgoingShare: false,
+                    acceptedSharedZoneCount: 0
+                ),
+                hasCompletedInitialProfilePrompt: true,
+                hasResolvedPrompt: false,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                pairingID: nil,
+                inactiveSharedOwnerIDs: [],
+                lastSyncAt: nil
+            )
+        )
+    }
+
+    func testDoesNotPromptWhenLocalPairingStateAlreadyExists() {
+        XCTAssertFalse(
+            ExistingICloudDataRecoveryPlan.shouldPresent(
+                snapshot: ExistingICloudDataSnapshot(
+                    hasPrivateZoneData: true,
+                    hasOutgoingShare: true,
+                    acceptedSharedZoneCount: 1
+                ),
+                hasCompletedInitialProfilePrompt: true,
+                hasResolvedPrompt: false,
+                hasStartedPairing: true,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                pairingID: "pair-1",
+                inactiveSharedOwnerIDs: [],
+                lastSyncAt: nil
+            )
+        )
+    }
+
+    func testDefersAutomaticSyncWhileFreshInstallCloudDecisionIsUnresolved() {
+        XCTAssertTrue(
+            ExistingICloudDataRecoveryPlan.shouldDeferAutomaticSync(
+                hasResolvedPrompt: false,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                pairingID: nil,
+                inactiveSharedOwnerIDs: [],
+                lastSyncAt: nil
+            )
+        )
+        XCTAssertFalse(
+            ExistingICloudDataRecoveryPlan.shouldDeferAutomaticSync(
+                hasResolvedPrompt: true,
+                hasStartedPairing: false,
+                partnerShareOwnerID: nil,
+                outgoingShareParticipantIDs: [],
+                pairingID: nil,
+                inactiveSharedOwnerIDs: [],
+                lastSyncAt: nil
+            )
+        )
+    }
+}
+
+final class PairingSafetyEducationPlanTests: XCTestCase {
+    func testShowsOneTimePairingSafetyNoticeAfterNicknameAndPartnerNoteFlow() {
+        XCTAssertTrue(
+            PairingSafetyEducationPlan.shouldPresentNotice(
+                pairingStatus: .paired,
+                hasPromptedPartnerNoteForCurrentPairing: true,
+                hasShownPairingSafetyNoticeForCurrentPairing: false
+            )
+        )
+    }
+
+    func testDoesNotShowPairingSafetyNoticeBeforePairingFinishesOrWhenAlreadyShown() {
+        XCTAssertFalse(
+            PairingSafetyEducationPlan.shouldPresentNotice(
+                pairingStatus: .waitingForPartnerToShare,
+                hasPromptedPartnerNoteForCurrentPairing: true,
+                hasShownPairingSafetyNoticeForCurrentPairing: false
+            )
+        )
+        XCTAssertFalse(
+            PairingSafetyEducationPlan.shouldPresentNotice(
+                pairingStatus: .paired,
+                hasPromptedPartnerNoteForCurrentPairing: false,
+                hasShownPairingSafetyNoticeForCurrentPairing: false
+            )
+        )
+        XCTAssertFalse(
+            PairingSafetyEducationPlan.shouldPresentNotice(
+                pairingStatus: .paired,
+                hasPromptedPartnerNoteForCurrentPairing: true,
+                hasShownPairingSafetyNoticeForCurrentPairing: true
+            )
+        )
+    }
+
+    func testShowsPersistentWarningOnlyWhenPairingIsActive() {
+        XCTAssertFalse(PairingSafetyEducationPlan.shouldShowPersistentWarning(pairingStatus: .notPaired))
+        XCTAssertTrue(PairingSafetyEducationPlan.shouldShowPersistentWarning(pairingStatus: .waitingForPartner))
+        XCTAssertTrue(PairingSafetyEducationPlan.shouldShowPersistentWarning(pairingStatus: .paired))
+    }
+}
+
+final class SharedPeoplePresentationPlanTests: XCTestCase {
+    func testOpensOfficialSharingOnlyWhenCloudKitIsAvailableAndNotBusy() {
+        XCTAssertTrue(
+            SharedPeoplePresentationPlan.canOpenOfficialSharing(
+                isCloudKitEnabled: true,
+                isPreparingShare: false,
+                isStoppingShare: false
+            )
+        )
+        XCTAssertFalse(
+            SharedPeoplePresentationPlan.canOpenOfficialSharing(
+                isCloudKitEnabled: false,
+                isPreparingShare: false,
+                isStoppingShare: false
+            )
+        )
+        XCTAssertFalse(
+            SharedPeoplePresentationPlan.canOpenOfficialSharing(
+                isCloudKitEnabled: true,
+                isPreparingShare: true,
+                isStoppingShare: false
+            )
+        )
+        XCTAssertFalse(
+            SharedPeoplePresentationPlan.canOpenOfficialSharing(
+                isCloudKitEnabled: true,
+                isPreparingShare: false,
+                isStoppingShare: true
+            )
+        )
+    }
+}
+
 final class PairingDatePlanTests: XCTestCase {
     func testNormalizesPairingDateToStartOfDay() throws {
         let calendar = Calendar(identifier: .gregorian)
@@ -1370,22 +1696,6 @@ final class SettingsStoreIdentityMigrationTests: XCTestCase {
         XCTAssertEqual(secondLaunchSettings.currentDisplayName, "New nickname")
     }
 
-    func testMigratesLegacyMemberIDsToDisplayOnlyNames() throws {
-        let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set("legacy-me", forKey: "currentMemberID")
-        defaults.set("legacy-partner", forKey: "partnerMemberID")
-
-        let settings = SettingsStore(defaults: defaults)
-
-        XCTAssertTrue(settings.currentLocalOwnerID.hasPrefix("local-owner-"))
-        XCTAssertNotEqual(settings.currentLocalOwnerID, "legacy-me")
-        XCTAssertEqual(settings.currentDisplayName, "legacy-me")
-        XCTAssertEqual(settings.partnerNoteName, "legacy-partner")
-        XCTAssertEqual(settings.legacyCurrentOwnerIDForLocalDataMigration, "legacy-me")
-    }
-
     func testPartnerSyncedDisplayNameIsPersistedSeparatelyFromPartnerNoteName() throws {
         let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -1399,6 +1709,42 @@ final class SettingsStoreIdentityMigrationTests: XCTestCase {
 
         XCTAssertEqual(relaunchedSettings.partnerNoteName, "Home note")
         XCTAssertEqual(relaunchedSettings.partnerSyncedDisplayName, "Remote nickname")
+    }
+
+    func testProfileAndPartnerNotePromptStatePersists() throws {
+        let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertFalse(settings.hasCompletedInitialProfilePrompt)
+        XCTAssertFalse(settings.hasPromptedPartnerNoteForCurrentPairing)
+        XCTAssertFalse(settings.hasShownPairingSafetyNoticeForCurrentPairing)
+
+        settings.currentDisplayName = "New nickname"
+        settings.hasCompletedInitialProfilePrompt = true
+        settings.hasPromptedPartnerNoteForCurrentPairing = true
+        settings.hasShownPairingSafetyNoticeForCurrentPairing = true
+
+        let relaunchedSettings = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(relaunchedSettings.currentDisplayName, "New nickname")
+        XCTAssertTrue(relaunchedSettings.hasCompletedInitialProfilePrompt)
+        XCTAssertTrue(relaunchedSettings.hasPromptedPartnerNoteForCurrentPairing)
+        XCTAssertTrue(relaunchedSettings.hasShownPairingSafetyNoticeForCurrentPairing)
+    }
+
+    func testResetsCompletedInitialProfilePromptWhenDisplayNameIsMissing() throws {
+        let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "hasCompletedInitialProfilePrompt")
+
+        let settings = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(settings.currentDisplayName, "")
+        XCTAssertFalse(settings.hasCompletedInitialProfilePrompt)
+        XCTAssertFalse(defaults.bool(forKey: "hasCompletedInitialProfilePrompt"))
     }
 }
 
@@ -2172,14 +2518,30 @@ final class CloudKitStopSharingPlanTests: XCTestCase {
     func testReviewSampleCleanupPurgesOnlyPreviewData() throws {
         let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
         let context = ModelContext(container)
-        let sample = ShareCalReviewSampleData.build(
-            now: Date(timeIntervalSince1970: 10_000),
-            currentMemberID: "me",
-            partnerMemberID: "partner"
+
+        let legacySampleMirror = cleanupMirror(
+            owner: "me",
+            key: "preview-event",
+            sourceCalendarID: "sharecal-preview"
         )
-        sample.mirrors.forEach(context.insert)
-        sample.invitations.forEach(context.insert)
-        sample.comments.forEach(context.insert)
+        context.insert(legacySampleMirror)
+        context.insert(EventInvitation(
+            id: "sharecal-preview:invite:10000",
+            creatorMemberID: "me",
+            inviteeMemberID: "partner",
+            title: "Preview invite",
+            startDate: Date(timeIntervalSince1970: 10_000),
+            endDate: Date(timeIntervalSince1970: 11_000),
+            location: nil,
+            notes: nil
+        ))
+        context.insert(EventComment(
+            id: "sharecal-preview:comment:10000",
+            eventMirrorID: legacySampleMirror.id,
+            authorMemberID: "partner",
+            body: "remove",
+            createdAt: Date(timeIntervalSince1970: 12_000)
+        ))
         context.insert(cleanupMirror(owner: "me", key: "real-event"))
         context.insert(EventInvitation(
             id: "real-invite",
@@ -2207,12 +2569,16 @@ final class CloudKitStopSharingPlanTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<EventComment>()).map(\.id), ["real-comment"])
     }
 
-    private func cleanupMirror(owner: String, key: String) -> EventMirror {
+    private func cleanupMirror(
+        owner: String,
+        key: String,
+        sourceCalendarID: String = "calendar"
+    ) -> EventMirror {
         EventMirror(
             id: key,
             ownerMemberID: owner,
             mirrorKey: key,
-            sourceCalendarID: "calendar",
+            sourceCalendarID: sourceCalendarID,
             sourceCalendarTitle: "Calendar",
             occurrenceStartDate: Date(timeIntervalSince1970: 1_000),
             startDate: Date(timeIntervalSince1970: 1_000),
@@ -2388,6 +2754,40 @@ final class CloudKitSharePermissionPlanTests: XCTestCase {
         XCTAssertTrue(permissions.contains(.allowPublic))
         XCTAssertTrue(permissions.contains(.allowPrivate))
         XCTAssertTrue(permissions.contains(.allowReadWrite))
+    }
+}
+
+final class CloudKitShareParticipantIdentityPlanTests: XCTestCase {
+    func testCountsOnlyAcceptedNonOwnerParticipantsAsShared() {
+        let snapshot = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentitySnapshot(from: [
+            CloudKitShareParticipantIdentity(
+                role: .owner,
+                acceptanceStatus: .accepted,
+                identifier: "owner@example.com",
+                emailAddress: "owner@example.com"
+            ),
+            CloudKitShareParticipantIdentity(
+                role: .privateUser,
+                acceptanceStatus: .pending,
+                identifier: "pending@example.com",
+                emailAddress: "pending@example.com"
+            ),
+            CloudKitShareParticipantIdentity(
+                role: .privateUser,
+                acceptanceStatus: .unknown,
+                identifier: "unknown@example.com",
+                emailAddress: "unknown@example.com"
+            ),
+            CloudKitShareParticipantIdentity(
+                role: .privateUser,
+                acceptanceStatus: .accepted,
+                identifier: "accepted@example.com",
+                emailAddress: "accepted@example.com"
+            )
+        ])
+
+        XCTAssertEqual(snapshot.identifiers, ["accepted@example.com"])
+        XCTAssertEqual(snapshot.emailAddresses, ["accepted@example.com"])
     }
 }
 
@@ -3504,6 +3904,24 @@ final class CloudKitBatchUpsertPlanTests: XCTestCase {
         XCTAssertEqual(recordIDs.map(\.recordName), ["server-record", "work:event-2:1800"])
     }
 
+    func testBuildsAccessRequestRecordIDsWithoutDoubleTransportPrefix() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpaceZone", ownerName: CKCurrentUserDefaultName)
+        let request = CalendarAccessRequest(
+            id: "request-1",
+            requesterMemberID: "me",
+            ownerMemberID: "_partnerOwner",
+            requestedStartDate: Date(timeIntervalSince1970: 1_000),
+            requestedEndDate: Date(timeIntervalSince1970: 2_000),
+            cloudKitRecordName: "history-access-request:request-1"
+        )
+
+        let recordIDs = CloudKitBatchUpsertPlan.recordIDs(forAccessRequests: [request], zoneID: zoneID)
+        let record = CalendarAccessRequestRecordMapper.record(from: request, zoneID: zoneID)
+
+        XCTAssertEqual(recordIDs.map(\.recordName), ["history-access-request:request-1"])
+        XCTAssertEqual(record.recordID.recordName, "history-access-request:request-1")
+    }
+
     func testDefinesMinimalDesiredKeysForEachForegroundQueryType() {
         XCTAssertEqual(
             CloudKitForegroundQueryPlan.desiredKeys(forRecordType: EventMirrorRecordMapper.recordType),
@@ -3853,27 +4271,6 @@ final class CommentServiceTests: XCTestCase {
 
         service.delete(comment)
         XCTAssertNotNil(comment.deletedAt)
-    }
-}
-
-final class ShareCalReviewSampleDataTests: XCTestCase {
-    func testBuildsReviewerPreviewWithBothMembersInvitationAndComment() {
-        let now = Date(timeIntervalSince1970: 1_800)
-
-        let sample = ShareCalReviewSampleData.build(
-            now: now,
-            currentMemberID: "me",
-            partnerMemberID: "partner"
-        )
-
-        XCTAssertEqual(sample.mirrors.count, 4)
-        XCTAssertEqual(Set(sample.mirrors.map(\.ownerMemberID)), ["me", "partner"])
-        XCTAssertTrue(sample.mirrors.allSatisfy { $0.sourceCalendarTitle == "ShareCal Preview" })
-        XCTAssertEqual(sample.invitations.count, 1)
-        XCTAssertEqual(sample.invitations[0].creatorMemberID, "me")
-        XCTAssertEqual(sample.invitations[0].inviteeMemberID, "partner")
-        XCTAssertEqual(sample.comments.count, 1)
-        XCTAssertEqual(sample.comments[0].authorMemberID, "partner")
     }
 }
 

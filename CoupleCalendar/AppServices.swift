@@ -55,6 +55,18 @@ final class SettingsStore {
     var partnerSyncedDisplayName: String? {
         didSet { saveOptionalString(partnerSyncedDisplayName, forKey: Key.partnerSyncedDisplayName) }
     }
+    var hasCompletedInitialProfilePrompt: Bool {
+        didSet { defaults.set(hasCompletedInitialProfilePrompt, forKey: Key.hasCompletedInitialProfilePrompt) }
+    }
+    var hasPromptedPartnerNoteForCurrentPairing: Bool {
+        didSet { defaults.set(hasPromptedPartnerNoteForCurrentPairing, forKey: Key.hasPromptedPartnerNoteForCurrentPairing) }
+    }
+    var hasShownPairingSafetyNoticeForCurrentPairing: Bool {
+        didSet { defaults.set(hasShownPairingSafetyNoticeForCurrentPairing, forKey: Key.hasShownPairingSafetyNoticeForCurrentPairing) }
+    }
+    var hasResolvedExistingICloudDataPrompt: Bool {
+        didSet { defaults.set(hasResolvedExistingICloudDataPrompt, forKey: Key.hasResolvedExistingICloudDataPrompt) }
+    }
     var partnerICloudEmailAddresses: [String] {
         didSet { defaults.set(partnerICloudEmailAddresses, forKey: Key.partnerICloudEmailAddresses) }
     }
@@ -90,13 +102,11 @@ final class SettingsStore {
     }
     var lastSyncError: String?
     var syncPhase: SyncPhase = .idle
-    private(set) var legacyCurrentOwnerIDForLocalDataMigration: String?
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let legacyCurrentMemberID = defaults.string(forKey: Key.currentMemberID)
         let storedOwnerID = Self.normalizedString(defaults.string(forKey: Key.currentLocalOwnerID))
         let localOwnerID: String
         if let storedOwnerID {
@@ -106,24 +116,24 @@ final class SettingsStore {
             localOwnerID = generatedOwnerID
             defaults.set(generatedOwnerID, forKey: Key.currentLocalOwnerID)
         }
-        let normalizedLegacyCurrentMemberID = Self.normalizedString(legacyCurrentMemberID)
         currentLocalOwnerID = localOwnerID
-        if storedOwnerID == nil,
-           let legacyCurrentMemberID = normalizedLegacyCurrentMemberID,
-           legacyCurrentMemberID != localOwnerID {
-            legacyCurrentOwnerIDForLocalDataMigration = legacyCurrentMemberID
-        } else {
-            legacyCurrentOwnerIDForLocalDataMigration = nil
-        }
-        currentDisplayName = Self.normalizedString(defaults.string(forKey: Key.currentDisplayName))
-            ?? normalizedLegacyCurrentMemberID
-            ?? ""
+        let resolvedCurrentDisplayName = Self.normalizedString(defaults.string(forKey: Key.currentDisplayName)) ?? ""
+        currentDisplayName = resolvedCurrentDisplayName
         currentICloudEmailAddress = defaults.string(forKey: Key.currentICloudEmailAddress) ?? ""
-        partnerNoteName = Self.normalizedString(defaults.string(forKey: Key.partnerNoteName))
-            ?? Self.normalizedString(defaults.string(forKey: Key.partnerMemberID))
-            ?? ""
+        partnerNoteName = Self.normalizedString(defaults.string(forKey: Key.partnerNoteName)) ?? ""
         partnerShareOwnerID = defaults.string(forKey: Key.partnerShareOwnerID)
         partnerSyncedDisplayName = Self.normalizedString(defaults.string(forKey: Key.partnerSyncedDisplayName))
+        let storedHasCompletedInitialProfilePrompt = defaults.object(forKey: Key.hasCompletedInitialProfilePrompt) as? Bool ?? false
+        if storedHasCompletedInitialProfilePrompt,
+           Self.normalizedString(resolvedCurrentDisplayName) == nil {
+            hasCompletedInitialProfilePrompt = false
+            defaults.set(false, forKey: Key.hasCompletedInitialProfilePrompt)
+        } else {
+            hasCompletedInitialProfilePrompt = storedHasCompletedInitialProfilePrompt
+        }
+        hasPromptedPartnerNoteForCurrentPairing = defaults.object(forKey: Key.hasPromptedPartnerNoteForCurrentPairing) as? Bool ?? false
+        hasShownPairingSafetyNoticeForCurrentPairing = defaults.object(forKey: Key.hasShownPairingSafetyNoticeForCurrentPairing) as? Bool ?? false
+        hasResolvedExistingICloudDataPrompt = defaults.object(forKey: Key.hasResolvedExistingICloudDataPrompt) as? Bool ?? false
         partnerICloudEmailAddresses = defaults.stringArray(forKey: Key.partnerICloudEmailAddresses) ?? []
         inactiveSharedOwnerIDs = defaults.stringArray(forKey: Key.inactiveSharedOwnerIDs) ?? []
         outgoingShareParticipantIDs = defaults.stringArray(forKey: Key.outgoingShareParticipantIDs) ?? []
@@ -203,12 +213,14 @@ final class SettingsStore {
     private enum Key {
         static let currentLocalOwnerID = "currentLocalOwnerID"
         static let currentDisplayName = "currentDisplayName"
-        static let currentMemberID = "currentMemberID"
         static let currentICloudEmailAddress = "currentICloudEmailAddress"
         static let partnerNoteName = "partnerNoteName"
-        static let partnerMemberID = "partnerMemberID"
         static let partnerShareOwnerID = "partnerShareOwnerID"
         static let partnerSyncedDisplayName = "partnerSyncedDisplayName"
+        static let hasCompletedInitialProfilePrompt = "hasCompletedInitialProfilePrompt"
+        static let hasPromptedPartnerNoteForCurrentPairing = "hasPromptedPartnerNoteForCurrentPairing"
+        static let hasShownPairingSafetyNoticeForCurrentPairing = "hasShownPairingSafetyNoticeForCurrentPairing"
+        static let hasResolvedExistingICloudDataPrompt = "hasResolvedExistingICloudDataPrompt"
         static let partnerICloudEmailAddresses = "partnerICloudEmailAddresses"
         static let inactiveSharedOwnerIDs = "inactiveSharedOwnerIDs"
         static let outgoingShareParticipantIDs = "outgoingShareParticipantIDs"
@@ -242,6 +254,16 @@ extension SettingsStore {
             partnerSyncedDisplayName: partnerSyncedDisplayName,
             partnerICloudIdentity: readablePartnerICloudIdentity,
             fallback: strings.partnerTitle
+        )
+    }
+
+    var partnerStatusDisplayName: String {
+        PairingSettingsPlan.partnerStatusDisplayName(
+            partnerNoteName: partnerNoteName,
+            partnerSyncedDisplayName: partnerSyncedDisplayName,
+            partnerICloudIdentity: readablePartnerICloudIdentity,
+            fallback: strings.partnerTitle,
+            language: appLanguage
         )
     }
 
@@ -323,9 +345,6 @@ struct SyncCoordinator {
                 )
             }
             timing.mark("calendarSelectionReady selected=\(settings.selectedCalendarIDs.count)")
-
-            try migrateLegacyLocalOwnerDataIfNeeded(modelContext: modelContext, settings: settings)
-            timing.mark("legacyLocalOwnerMigrationChecked")
 
             let localAccessRequests = try modelContext.fetch(FetchDescriptor<CalendarAccessRequest>())
             if settings.hasStartedPairing || settings.partnerShareOwnerID != nil || !settings.outgoingShareParticipantIDs.isEmpty {
@@ -628,26 +647,6 @@ struct SyncCoordinator {
             predicate: #Predicate { $0.ownerMemberID == ownerMemberID }
         )
         return try modelContext.fetch(descriptor)
-    }
-
-    private func migrateLegacyLocalOwnerDataIfNeeded(
-        modelContext: ModelContext,
-        settings: SettingsStore
-    ) throws {
-        guard let legacyOwnerID = normalizedID(settings.legacyCurrentOwnerIDForLocalDataMigration),
-              legacyOwnerID != settings.currentLocalOwnerID else {
-            return
-        }
-
-        let descriptor = FetchDescriptor<EventMirror>(
-            predicate: #Predicate { $0.ownerMemberID == legacyOwnerID }
-        )
-        let legacyMirrors = try modelContext.fetch(descriptor)
-        guard !legacyMirrors.isEmpty else { return }
-        for mirror in legacyMirrors {
-            mirror.ownerMemberID = settings.currentLocalOwnerID
-        }
-        try modelContext.save()
     }
 
     private func normalizedID(_ value: String?) -> String? {

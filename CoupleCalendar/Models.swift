@@ -53,6 +53,7 @@ struct ShareCalStrings {
     var meTitle: String { text("Me", "我") }
     var partnerTitle: String { text("Partner", "对方") }
     var syncAccessibilityLabel: String { text("Sync", "同步") }
+    var diagnosticsTitle: String { text("Diagnostics", "详情诊断") }
     var createInviteAccessibilityLabel: String { text("Create invite", "新建邀请") }
     var previousDateAccessibilityLabel: String { text("Previous date", "上一个日期") }
     var nextDateAccessibilityLabel: String { text("Next date", "下一个日期") }
@@ -67,11 +68,26 @@ struct ShareCalStrings {
     var createInviteSection: String { text("Details", "详情") }
     var emptyTitleError: String { text("Title is required.", "请输入标题。") }
     var invalidDateRangeError: String { text("End time must be after start time.", "结束时间必须晚于开始时间。") }
-    var noSharedSchedulesTitle: String { text("No shared schedules", "暂无共享日程") }
+    var noSharedSchedulesTitle: String { text("No schedules today", "当前无日程") }
     var noSharedSchedulesDescription: String {
-        text("Preview a paired schedule or choose calendars in Settings.", "预览双方日程，或在设置中选择要共享的日历。")
+        text("There are no shared schedules for today.", "今天没有共享日程。")
     }
-    var loadSampleScheduleButton: String { text("Load Sample Schedule", "加载示例日程") }
+    var setupCalendarAccessTitle: String { text("Choose Calendars to Share", "选择要共享的日历") }
+    var setupCalendarAccessMessage: String {
+        text(
+            "Allow calendar access, then choose which calendars ShareCal can share.",
+            "请先授权日历访问，然后选择 ShareCal 可以共享哪些日历。"
+        )
+    }
+    var setupCalendarAccessButton: String { text("Go to Calendar Settings", "前往日历设置") }
+    var setupPairingTitle: String { text("Start Pairing", "开启配对") }
+    var setupPairingMessage: String {
+        text(
+            "Calendar sharing is ready. Start pairing to invite your partner.",
+            "日历共享设置已准备好。下一步发起配对，邀请对方加入。"
+        )
+    }
+    var setupPairingButton: String { text("Go to Pairing", "前往配对") }
     var syncingSelectedCalendars: String { text("Syncing selected calendars...", "正在同步已选日历...") }
     var notSyncedYet: String { text("Not synced yet", "尚未同步") }
     var noEvents: String { text("No events", "暂无日程") }
@@ -97,6 +113,9 @@ struct ShareCalStrings {
     var noInvitations: String { text("No invitations", "暂无邀请") }
     var acceptButton: String { text("Accept", "接受") }
     var declineButton: String { text("Decline", "拒绝") }
+    var saveButton: String { text("Save", "保存") }
+    var skipButton: String { text("Skip", "跳过") }
+    var continueButton: String { text("Continue", "继续") }
     var profileSection: String { text("Profile", "个人资料") }
     var myNicknameLabel: String { text("My Nickname", "我的昵称") }
     var myICloudEmailLabel: String { text("My iCloud Email", "我的 iCloud 邮箱") }
@@ -105,6 +124,39 @@ struct ShareCalStrings {
     var myDisplayNamePlaceholder: String { text("My nickname", "我的昵称") }
     var partnerDisplayNamePlaceholder: String { text("Partner note", "对方备注名") }
     var currentDisplayNameRequiredMessage: String { text("Enter your nickname before pairing.", "配对前请先填写我的昵称。") }
+    var initialProfilePromptTitle: String { text("Set Your Nickname", "设置我的昵称") }
+    var initialProfilePromptMessage: String {
+        text(
+            "This name helps your partner recognize you in ShareCal.",
+            "这个昵称会用于让对方在 ShareCal 中认出你。"
+        )
+    }
+    var partnerNotePromptTitle: String { text("Set Partner Note", "设置对方备注名") }
+    var partnerNotePromptMessage: String {
+        text(
+            "Add an optional local note for your partner. Your partner will not see it.",
+            "你可以为对方设置一个本地备注名，对方不会看到。"
+        )
+    }
+    var pairingSafetyNoticeTitle: String { text("Before You Reinstall", "卸载或重装前请先解除配对") }
+    var pairingSafetyNoticeMessage: String {
+        text(
+            "ShareCal's iCloud sharing data is separate from your local calendars. Unpair before uninstalling or reinstalling this app. Deleting ShareCal iCloud data will not delete your original calendars or events in the system Calendar app.",
+            "ShareCal 的 iCloud 共享数据与本地日历是隔离的。卸载或重装本 App 前，请先解除配对。删除 ShareCal 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
+        )
+    }
+    var existingICloudDataPromptTitle: String {
+        text("Existing iCloud Data Found", "发现旧的 iCloud 数据")
+    }
+    var existingICloudDataPromptMessage: String {
+        text(
+            "This install looks new, but previous ShareCal iCloud data still exists for this Apple ID. If you no longer want to keep sharing, delete it now. ShareCal's iCloud data is separate from your local calendars, and deleting it will not delete your original calendars or events in the system Calendar app.",
+            "这次安装看起来是全新的，但这个 Apple ID 之前的 ShareCal iCloud 数据仍然存在。如果你不打算继续共享，建议现在删除。ShareCal 的 iCloud 数据与本地日历是隔离的，删除它不会删除系统日历中的原始日历或事件。"
+        )
+    }
+    var continueExistingICloudDataButton: String {
+        text("Keep Existing iCloud Data", "继续使用现有 iCloud 数据")
+    }
     var languageSection: String { text("Language", "语言") }
     var appLanguagePicker: String { text("App language", "应用语言") }
     var calendarAccessSection: String { text("Calendar Access", "日历访问") }
@@ -188,6 +240,23 @@ struct ShareCalStrings {
     }
     var unpairSucceeded: String { text("Unpaired.", "已解除配对。") }
     var oldSharedCalendarsSection: String { text("Old Shared Calendars", "旧共享") }
+    var sharedPeopleTitle: String { text("Shared People", "共享人") }
+    var sharedPeopleDescription: String {
+        text(
+            "Manage people and invitation link with iCloud sharing.",
+            "使用 iCloud 共享界面管理成员和邀请链接。"
+        )
+    }
+    var pairingSafetySection: String { text("Before Uninstalling", "卸载前提醒") }
+    var pairingSafetyPersistentWarningTitle: String {
+        text("Unpair before uninstalling or reinstalling this app.", "卸载或重装本 App 前，请先解除配对。")
+    }
+    var pairingSafetyPersistentWarningMessage: String {
+        text(
+            "ShareCal's iCloud sharing data is separate from your local calendars. Removing ShareCal iCloud data will not delete your original calendars or events in the system Calendar app.",
+            "ShareCal 的 iCloud 共享数据与本地日历是隔离的。删除 ShareCal 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
+        )
+    }
     var oldSharedCalendarsCleanupPromptTitle: String {
         text("Old Shared Calendars Found", "发现旧共享")
     }
@@ -327,6 +396,15 @@ struct ShareCalStrings {
 
     func pairingDateLine(_ dateText: String) -> String {
         text("Pairing date: \(dateText)", "配对日：\(dateText)")
+    }
+
+    func displayNameWithNote(displayName: String, note: String) -> String {
+        switch language {
+        case .english:
+            "\(displayName) (\(note))"
+        case .chinese:
+            "\(displayName)（\(note)）"
+        }
     }
 
     func calendarPairingStatusLine(dayCount: Int, dateText: String) -> String {
@@ -1064,6 +1142,34 @@ enum CalendarMirrorVisibilityPlan {
     }
 }
 
+enum CalendarSetupGuidanceStep: Equatable {
+    case calendarAccess
+    case pairing
+}
+
+enum CalendarSetupGuidancePlan {
+    static func step(
+        hasCompletedInitialProfilePrompt: Bool,
+        currentDisplayName: String,
+        authorizationState: CalendarAuthorizationState,
+        selectedCalendarIDs: Set<String>,
+        pairingStatus: PairingStatus
+    ) -> CalendarSetupGuidanceStep? {
+        guard hasCompletedInitialProfilePrompt else { return nil }
+        guard PairingSettingsPlan.normalizedDisplayName(currentDisplayName) != nil else { return nil }
+        guard authorizationState.canReadEvents && !selectedCalendarIDs.isEmpty else {
+            return .calendarAccess
+        }
+
+        switch pairingStatus {
+        case .notPaired, .waitingForYouToShare:
+            return .pairing
+        case .waitingForPartner, .waitingForPartnerToShare, .paired:
+            return nil
+        }
+    }
+}
+
 enum CalendarDisplayMirrorPlan {
     static let transientIDPrefix = "display:"
 
@@ -1147,8 +1253,16 @@ enum CalendarAccessRequestListPlan {
             .compactMap(preferredRequest(in:))
     }
 
-    static func pendingIncoming(_ requests: [CalendarAccessRequest]) -> [CalendarAccessRequest] {
-        collapsedRequests(requests.filter { $0.source == .privateOwnerZone })
+    static func pendingIncoming(
+        _ requests: [CalendarAccessRequest],
+        currentMemberID: String
+    ) -> [CalendarAccessRequest] {
+        collapsedRequests(
+            requests.filter { request in
+                request.source == .privateOwnerZone
+                    && request.ownerMemberID == currentMemberID
+            }
+        )
             .filter { $0.status == .pending }
             .sorted { lhs, rhs in
                 if lhs.createdAt == rhs.createdAt {
@@ -1223,7 +1337,10 @@ enum PendingActionBadgePlan {
             InvitationInteractionPlan.canRespond(to: $0, currentMemberID: currentMemberID)
                 && $0.archivedAt == nil
         }.count
-        return invitationCount + CalendarAccessRequestListPlan.pendingIncoming(accessRequests).count
+        return invitationCount + CalendarAccessRequestListPlan.pendingIncoming(
+            accessRequests,
+            currentMemberID: currentMemberID
+        ).count
     }
 }
 
@@ -1370,8 +1487,49 @@ enum PairingSettingsPlan {
         return fallback
     }
 
+    static func partnerStatusDisplayName(
+        partnerNoteName: String?,
+        partnerSyncedDisplayName: String?,
+        partnerICloudIdentity: String,
+        fallback: String,
+        language: AppLanguage
+    ) -> String {
+        let displayName = partnerDisplayBaseName(
+            partnerSyncedDisplayName: partnerSyncedDisplayName,
+            partnerICloudIdentity: partnerICloudIdentity,
+            fallback: fallback
+        )
+        guard let noteName = normalizedID(partnerNoteName),
+              noteName != displayName else {
+            return displayName
+        }
+        return ShareCalStrings(language: language).displayNameWithNote(
+            displayName: displayName,
+            note: noteName
+        )
+    }
+
+    static func randomDisplayName(randomNumber: () -> Int = { Int.random(in: 0...9_999) }) -> String {
+        let number = max(0, min(9_999, randomNumber()))
+        return String(format: "ShareCal %04d", number)
+    }
+
     static func normalizedDisplayName(_ displayName: String?) -> String? {
         normalizedID(displayName)
+    }
+
+    private static func partnerDisplayBaseName(
+        partnerSyncedDisplayName: String?,
+        partnerICloudIdentity: String,
+        fallback: String
+    ) -> String {
+        if let syncedDisplayName = normalizedID(partnerSyncedDisplayName) {
+            return syncedDisplayName
+        }
+        if isReadableICloudIdentity(partnerICloudIdentity) {
+            return partnerICloudIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return fallback
     }
 
     private static func normalizedIDs(_ ids: [String]) -> [String] {
@@ -1404,6 +1562,123 @@ enum OldSharedCalendarsCleanupPromptPlan {
         pairingStatus == .paired
             && !inactiveSharedOwnerIDs.isEmpty
             && !hasPresentedPrompt
+    }
+}
+
+struct ExistingICloudDataSnapshot: Equatable {
+    let hasPrivateZoneData: Bool
+    let hasOutgoingShare: Bool
+    let acceptedSharedZoneCount: Int
+    let lookupFailed: Bool
+
+    init(
+        hasPrivateZoneData: Bool,
+        hasOutgoingShare: Bool,
+        acceptedSharedZoneCount: Int,
+        lookupFailed: Bool = false
+    ) {
+        self.hasPrivateZoneData = hasPrivateZoneData
+        self.hasOutgoingShare = hasOutgoingShare
+        self.acceptedSharedZoneCount = acceptedSharedZoneCount
+        self.lookupFailed = lookupFailed
+    }
+
+    var hasRecoverableData: Bool {
+        hasPrivateZoneData || hasOutgoingShare || acceptedSharedZoneCount > 0
+    }
+}
+
+enum ExistingICloudDataRecoveryPlan {
+    static func shouldPresent(
+        snapshot: ExistingICloudDataSnapshot,
+        hasCompletedInitialProfilePrompt: Bool,
+        hasResolvedPrompt: Bool,
+        hasStartedPairing: Bool,
+        partnerShareOwnerID: String?,
+        outgoingShareParticipantIDs: [String],
+        pairingID: String?,
+        inactiveSharedOwnerIDs: [String],
+        lastSyncAt: Date?
+    ) -> Bool {
+        guard hasCompletedInitialProfilePrompt else { return false }
+        guard !hasResolvedPrompt else { return false }
+        guard looksLikeFreshLocalState(
+            hasStartedPairing: hasStartedPairing,
+            partnerShareOwnerID: partnerShareOwnerID,
+            outgoingShareParticipantIDs: outgoingShareParticipantIDs,
+            pairingID: pairingID,
+            inactiveSharedOwnerIDs: inactiveSharedOwnerIDs,
+            lastSyncAt: lastSyncAt
+        ) else { return false }
+        return snapshot.hasRecoverableData
+    }
+
+    static func shouldDeferAutomaticSync(
+        hasResolvedPrompt: Bool,
+        hasStartedPairing: Bool,
+        partnerShareOwnerID: String?,
+        outgoingShareParticipantIDs: [String],
+        pairingID: String?,
+        inactiveSharedOwnerIDs: [String],
+        lastSyncAt: Date?
+    ) -> Bool {
+        guard !hasResolvedPrompt else { return false }
+        return looksLikeFreshLocalState(
+            hasStartedPairing: hasStartedPairing,
+            partnerShareOwnerID: partnerShareOwnerID,
+            outgoingShareParticipantIDs: outgoingShareParticipantIDs,
+            pairingID: pairingID,
+            inactiveSharedOwnerIDs: inactiveSharedOwnerIDs,
+            lastSyncAt: lastSyncAt
+        )
+    }
+
+    private static func looksLikeFreshLocalState(
+        hasStartedPairing: Bool,
+        partnerShareOwnerID: String?,
+        outgoingShareParticipantIDs: [String],
+        pairingID: String?,
+        inactiveSharedOwnerIDs: [String],
+        lastSyncAt: Date?
+    ) -> Bool {
+        guard !hasStartedPairing else { return false }
+        guard normalizedID(partnerShareOwnerID) == nil else { return false }
+        guard !outgoingShareParticipantIDs.contains(where: { normalizedID($0) != nil }) else { return false }
+        guard normalizedID(pairingID) == nil else { return false }
+        guard inactiveSharedOwnerIDs.allSatisfy({ normalizedID($0) == nil }) else { return false }
+        return lastSyncAt == nil
+    }
+
+    private static func normalizedID(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+}
+
+enum PairingSafetyEducationPlan {
+    static func shouldPresentNotice(
+        pairingStatus: PairingStatus,
+        hasPromptedPartnerNoteForCurrentPairing: Bool,
+        hasShownPairingSafetyNoticeForCurrentPairing: Bool
+    ) -> Bool {
+        guard pairingStatus == .paired else { return false }
+        guard hasPromptedPartnerNoteForCurrentPairing else { return false }
+        return !hasShownPairingSafetyNoticeForCurrentPairing
+    }
+
+    static func shouldShowPersistentWarning(pairingStatus: PairingStatus) -> Bool {
+        pairingStatus != .notPaired
+    }
+}
+
+enum SharedPeoplePresentationPlan {
+    static func canOpenOfficialSharing(
+        isCloudKitEnabled: Bool,
+        isPreparingShare: Bool,
+        isStoppingShare: Bool
+    ) -> Bool {
+        isCloudKitEnabled && !isPreparingShare && !isStoppingShare
     }
 }
 
@@ -1957,6 +2232,8 @@ final class SyncState {
 
 @MainActor
 enum ShareCalLocalDataCleanupService {
+    private static let legacyReviewSampleSourceCalendarID = "sharecal-preview"
+
     static func purge(modelContext: ModelContext) throws {
         try deleteAll(CoupleSpace.self, modelContext: modelContext)
         try deleteAll(EventMirror.self, modelContext: modelContext)
@@ -2032,7 +2309,7 @@ enum ShareCalLocalDataCleanupService {
         let existingMirrors = try modelContext.fetch(FetchDescriptor<EventMirror>())
         let sampleMirrorIDs = Set(
             existingMirrors
-                .filter { $0.sourceCalendarID == ShareCalReviewSampleData.sourceCalendarID }
+                .filter { $0.sourceCalendarID == legacyReviewSampleSourceCalendarID }
                 .map(\.id)
         )
         for mirror in existingMirrors where sampleMirrorIDs.contains(mirror.id) {
@@ -2040,12 +2317,12 @@ enum ShareCalLocalDataCleanupService {
         }
 
         let existingInvitations = try modelContext.fetch(FetchDescriptor<EventInvitation>())
-        for invitation in existingInvitations where invitation.id.hasPrefix("\(ShareCalReviewSampleData.sourceCalendarID):") {
+        for invitation in existingInvitations where invitation.id.hasPrefix("\(legacyReviewSampleSourceCalendarID):") {
             modelContext.delete(invitation)
         }
 
         let existingComments = try modelContext.fetch(FetchDescriptor<EventComment>())
-        for comment in existingComments where comment.id.hasPrefix("\(ShareCalReviewSampleData.sourceCalendarID):") || sampleMirrorIDs.contains(comment.eventMirrorID) {
+        for comment in existingComments where comment.id.hasPrefix("\(legacyReviewSampleSourceCalendarID):") || sampleMirrorIDs.contains(comment.eventMirrorID) {
             modelContext.delete(comment)
         }
 

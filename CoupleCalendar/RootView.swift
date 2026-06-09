@@ -8,6 +8,31 @@ enum ShareCalTab {
     case settings
 }
 
+enum SettingsFocusTarget: Hashable {
+    case calendarAccess
+    case pairing
+}
+
+enum RootSheet: Identifiable, Equatable {
+    case initialProfilePrompt
+    case existingICloudDataRecovery
+    case partnerNotePrompt
+    case pairingSafetyNotice
+
+    var id: String {
+        switch self {
+        case .initialProfilePrompt:
+            return "initialProfilePrompt"
+        case .existingICloudDataRecovery:
+            return "existingICloudDataRecovery"
+        case .partnerNotePrompt:
+            return "partnerNotePrompt"
+        case .pairingSafetyNotice:
+            return "pairingSafetyNotice"
+        }
+    }
+}
+
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -16,6 +41,9 @@ struct RootView: View {
     @State private var isRunningForegroundSync = false
     @State private var selectedTab: ShareCalTab = .calendar
     @State private var calendarFocusRequest: CalendarFocusRequest?
+    @State private var settingsFocus: SettingsFocusTarget?
+    @State private var activeRootSheet: RootSheet?
+    @State private var hasEvaluatedExistingICloudDataPrompt = false
     @Query(sort: \EventInvitation.startDate) private var invitations: [EventInvitation]
     @Query(sort: \CalendarAccessRequest.createdAt) private var accessRequests: [CalendarAccessRequest]
 
@@ -38,7 +66,13 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                CalendarTabView(focusRequest: $calendarFocusRequest)
+                CalendarTabView(
+                    focusRequest: $calendarFocusRequest,
+                    onOpenSettings: { focus in
+                        settingsFocus = focus
+                        selectedTab = .settings
+                    }
+                )
             }
             .tabItem {
                 Label(settings.strings.calendarTab, systemImage: "calendar")
@@ -59,7 +93,7 @@ struct RootView: View {
             .tag(ShareCalTab.invites)
 
             NavigationStack {
-                SettingsTabView()
+                SettingsTabView(focus: $settingsFocus)
             }
             .tabItem {
                 Label(settings.strings.settingsTab, systemImage: "gearshape")
@@ -67,8 +101,8 @@ struct RootView: View {
             .tag(ShareCalTab.settings)
         }
         .task {
-            await syncAfterAcceptedShareIfNeeded()
-            purgeReviewSampleDataIfPaired()
+            await Task.yield()
+            await reevaluateRootSheetFlow()
         }
         .onReceive(NotificationCenter.default.publisher(for: ShareCalAcceptedShareSignal.notificationName)) { _ in
             Task {
@@ -83,8 +117,161 @@ struct RootView: View {
         }
         .onChange(of: pairingStatus) { _, newStatus in
             guard newStatus == .paired else { return }
-            purgeReviewSampleDataIfPaired()
+            Task {
+                await reevaluateRootSheetFlow()
+            }
         }
+        .onChange(of: activeRootSheet) { _, newSheet in
+            guard newSheet == nil else { return }
+            Task {
+                await reevaluateRootSheetFlow()
+            }
+        }
+        .sheet(item: $activeRootSheet) { sheet in
+            switch sheet {
+            case .initialProfilePrompt:
+                InitialProfilePromptSheet(
+                    initialNickname: settings.currentDisplayName,
+                    onSave: { nickname in
+                        settings.currentDisplayName = nickname
+                        settings.hasCompletedInitialProfilePrompt = true
+                    },
+                    onSkip: {
+                        settings.currentDisplayName = PairingSettingsPlan.randomDisplayName()
+                        settings.hasCompletedInitialProfilePrompt = true
+                    }
+                )
+            case .existingICloudDataRecovery:
+                ExistingICloudDataRecoverySheet(
+                    onDelete: {
+                        try await deleteExistingICloudData()
+                    },
+                    onKeep: {
+                        try await continueUsingExistingICloudData()
+                    }
+                )
+            case .partnerNotePrompt:
+                PartnerNotePromptSheet(
+                    initialNote: settings.partnerNoteName,
+                    onSave: { note in
+                        settings.partnerNoteName = note
+                        settings.hasPromptedPartnerNoteForCurrentPairing = true
+                    },
+                    onSkip: {
+                        settings.partnerNoteName = ""
+                        settings.hasPromptedPartnerNoteForCurrentPairing = true
+                    }
+                )
+            case .pairingSafetyNotice:
+                PairingSafetyNoticeSheet {
+                    settings.hasShownPairingSafetyNoticeForCurrentPairing = true
+                }
+            }
+        }
+    }
+
+    private var shouldDeferAutomaticSyncForExistingICloudDecision: Bool {
+        ExistingICloudDataRecoveryPlan.shouldDeferAutomaticSync(
+            hasResolvedPrompt: settings.hasResolvedExistingICloudDataPrompt,
+            hasStartedPairing: settings.hasStartedPairing,
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
+            pairingID: settings.pairingID,
+            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
+            lastSyncAt: settings.lastSyncAt
+        ) && (!hasEvaluatedExistingICloudDataPrompt || activeRootSheet == .existingICloudDataRecovery)
+    }
+
+    private func presentInitialProfilePromptIfNeeded() {
+        guard activeRootSheet == nil else { return }
+        if PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) != nil {
+            if !settings.hasCompletedInitialProfilePrompt {
+                settings.hasCompletedInitialProfilePrompt = true
+            }
+            return
+        }
+        if settings.hasCompletedInitialProfilePrompt {
+            settings.hasCompletedInitialProfilePrompt = false
+        }
+        activeRootSheet = .initialProfilePrompt
+    }
+
+    private func presentPartnerNotePromptIfNeeded() {
+        guard activeRootSheet == nil else { return }
+        guard pairingStatus == .paired else { return }
+        guard !settings.hasPromptedPartnerNoteForCurrentPairing else { return }
+        activeRootSheet = .partnerNotePrompt
+    }
+
+    private func presentPairingSafetyNoticeIfNeeded() {
+        guard activeRootSheet == nil else { return }
+        guard PairingSafetyEducationPlan.shouldPresentNotice(
+            pairingStatus: pairingStatus,
+            hasPromptedPartnerNoteForCurrentPairing: settings.hasPromptedPartnerNoteForCurrentPairing,
+            hasShownPairingSafetyNoticeForCurrentPairing: settings.hasShownPairingSafetyNoticeForCurrentPairing
+        ) else { return }
+        activeRootSheet = .pairingSafetyNotice
+    }
+
+    @MainActor
+    private func presentExistingICloudDataPromptIfNeeded() async {
+        guard activeRootSheet == nil else { return }
+        guard !settings.hasResolvedExistingICloudDataPrompt else {
+            hasEvaluatedExistingICloudDataPrompt = true
+            return
+        }
+
+        let shouldProbe = ExistingICloudDataRecoveryPlan.shouldDeferAutomaticSync(
+            hasResolvedPrompt: settings.hasResolvedExistingICloudDataPrompt,
+            hasStartedPairing: settings.hasStartedPairing,
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
+            pairingID: settings.pairingID,
+            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
+            lastSyncAt: settings.lastSyncAt
+        )
+        guard shouldProbe else {
+            hasEvaluatedExistingICloudDataPrompt = true
+            return
+        }
+        guard settings.hasCompletedInitialProfilePrompt else { return }
+        guard let cloudKit = services.cloudKitIfAvailable else {
+            hasEvaluatedExistingICloudDataPrompt = true
+            settings.hasResolvedExistingICloudDataPrompt = true
+            return
+        }
+
+        let snapshot = await cloudKit.existingICloudDataSnapshot()
+        if snapshot.lookupFailed {
+            return
+        }
+        hasEvaluatedExistingICloudDataPrompt = true
+        if ExistingICloudDataRecoveryPlan.shouldPresent(
+            snapshot: snapshot,
+            hasCompletedInitialProfilePrompt: settings.hasCompletedInitialProfilePrompt,
+            hasResolvedPrompt: settings.hasResolvedExistingICloudDataPrompt,
+            hasStartedPairing: settings.hasStartedPairing,
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
+            pairingID: settings.pairingID,
+            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
+            lastSyncAt: settings.lastSyncAt
+        ) {
+            activeRootSheet = .existingICloudDataRecovery
+            return
+        }
+        settings.hasResolvedExistingICloudDataPrompt = true
+    }
+
+    @MainActor
+    private func reevaluateRootSheetFlow() async {
+        presentInitialProfilePromptIfNeeded()
+        guard activeRootSheet == nil else { return }
+        await syncAfterAcceptedShareIfNeeded()
+        purgeLegacyReviewSampleData()
+        await presentExistingICloudDataPromptIfNeeded()
+        presentPartnerNotePromptIfNeeded()
+        presentPairingSafetyNoticeIfNeeded()
     }
 
     @MainActor
@@ -95,6 +282,7 @@ struct RootView: View {
 
     @MainActor
     private func syncAfterSceneBecameActiveIfNeeded(now: Date = .now) async {
+        guard !shouldDeferAutomaticSyncForExistingICloudDecision else { return }
         let hasPendingAcceptedShare = ShareCalAcceptedShareSignal.hasPending()
         guard ForegroundSyncPlan.shouldRunAutomaticSync(
             lastSyncAt: settings.lastSyncAt,
@@ -107,11 +295,15 @@ struct RootView: View {
     }
 
     @MainActor
-    private func runForegroundSync(consumingAcceptedShareSignal: Bool) async {
-        guard !isRunningForegroundSync else { return }
-        guard settings.syncPhase != .syncing else { return }
+    @discardableResult
+    private func runForegroundSync(
+        consumingAcceptedShareSignal: Bool,
+        forceCloudKit: Bool = false
+    ) async -> Bool {
+        guard !isRunningForegroundSync else { return false }
+        guard settings.syncPhase != .syncing else { return false }
         if consumingAcceptedShareSignal {
-            guard ShareCalAcceptedShareSignal.consumePending() else { return }
+            guard ShareCalAcceptedShareSignal.consumePending() else { return false }
             settings.iCloudSharingEnabled = true
             settings.partnerICloudEmailAddresses = ICloudSharingIdentityDisplayPlan.emailAddresses(
                 merging: settings.partnerICloudEmailAddresses,
@@ -130,18 +322,264 @@ struct RootView: View {
         await coordinator.foregroundSync(
             modelContext: modelContext,
             settings: settings,
-            forceCloudKit: consumingAcceptedShareSignal
+            forceCloudKit: consumingAcceptedShareSignal || forceCloudKit
         )
-        purgeReviewSampleDataIfPaired()
+        purgeLegacyReviewSampleData()
+        return true
     }
 
     @MainActor
-    private func purgeReviewSampleDataIfPaired() {
-        guard pairingStatus == .paired else { return }
+    private func continueUsingExistingICloudData() async throws {
+        settings.lastSyncError = nil
+        settings.iCloudSharingEnabled = true
+        let didRun = await runForegroundSync(consumingAcceptedShareSignal: false, forceCloudKit: true)
+        guard didRun else {
+            let message = settings.strings.cloudKitSyncDisabledLocalBuild
+            throw NSError(domain: "ShareCal", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        if settings.syncPhase == .failed {
+            let message = settings.lastSyncError ?? settings.strings.cloudKitSyncDisabledLocalBuild
+            throw NSError(domain: "ShareCal", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        settings.hasResolvedExistingICloudDataPrompt = true
+    }
+
+    @MainActor
+    private func deleteExistingICloudData() async throws {
+        guard let cloudKit = services.cloudKitIfAvailable else {
+            throw NSError(
+                domain: "ShareCal",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: settings.strings.iCloudSharingUnavailableLocalBuild]
+            )
+        }
+
+        try await cloudKit.deleteICloudData(ownerMemberID: settings.currentLocalOwnerID)
+        try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
+        settings.iCloudSharingEnabled = false
+        settings.hasStartedPairing = false
+        settings.partnerShareOwnerID = nil
+        settings.partnerNoteName = ""
+        settings.hasPromptedPartnerNoteForCurrentPairing = false
+        settings.hasShownPairingSafetyNoticeForCurrentPairing = false
+        settings.partnerSyncedDisplayName = nil
+        settings.partnerICloudEmailAddresses = []
+        settings.outgoingShareParticipantIDs = []
+        settings.clearPairingID()
+        settings.inactiveSharedOwnerIDs = []
+        settings.clearPairingDate()
+        settings.lastSyncAt = nil
+        settings.lastSyncError = nil
+        settings.syncPhase = .idle
+        settings.hasResolvedExistingICloudDataPrompt = true
+    }
+
+    @MainActor
+    private func purgeLegacyReviewSampleData() {
         do {
             try ShareCalLocalDataCleanupService.purgeReviewSampleData(modelContext: modelContext)
         } catch {
             settings.lastSyncError = error.localizedDescription
+        }
+    }
+}
+
+struct InitialProfilePromptSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var settings
+    @State private var nickname: String
+    let onSave: (String) -> Void
+    let onSkip: () -> Void
+
+    init(
+        initialNickname: String,
+        onSave: @escaping (String) -> Void,
+        onSkip: @escaping () -> Void
+    ) {
+        _nickname = State(initialValue: initialNickname)
+        self.onSave = onSave
+        self.onSkip = onSkip
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(settings.strings.initialProfilePromptMessage)
+                        .foregroundStyle(.secondary)
+                    TextField(settings.strings.myDisplayNamePlaceholder, text: $nickname)
+                        .textInputAutocapitalization(.words)
+                        .accessibilityLabel(settings.strings.myNicknameLabel)
+                }
+            }
+            .navigationTitle(settings.strings.initialProfilePromptTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(settings.strings.skipButton) {
+                        onSkip()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(settings.strings.saveButton) {
+                        guard let normalizedNickname = PairingSettingsPlan.normalizedDisplayName(nickname) else { return }
+                        onSave(normalizedNickname)
+                        dismiss()
+                    }
+                    .disabled(PairingSettingsPlan.normalizedDisplayName(nickname) == nil)
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+}
+
+struct PartnerNotePromptSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var settings
+    @State private var note: String
+    let onSave: (String) -> Void
+    let onSkip: () -> Void
+
+    init(
+        initialNote: String,
+        onSave: @escaping (String) -> Void,
+        onSkip: @escaping () -> Void
+    ) {
+        _note = State(initialValue: initialNote)
+        self.onSave = onSave
+        self.onSkip = onSkip
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(settings.strings.partnerNotePromptMessage)
+                        .foregroundStyle(.secondary)
+                    TextField(settings.strings.partnerDisplayNamePlaceholder, text: $note)
+                        .textInputAutocapitalization(.words)
+                        .accessibilityLabel(settings.strings.partnerNicknameEditLabel)
+                }
+            }
+            .navigationTitle(settings.strings.partnerNotePromptTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(settings.strings.skipButton) {
+                        onSkip()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(settings.strings.saveButton) {
+                        let normalizedNote = PairingSettingsPlan.normalizedDisplayName(note) ?? ""
+                        onSave(normalizedNote)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+}
+
+struct PairingSafetyNoticeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var settings
+    let onAcknowledge: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(settings.strings.pairingSafetyNoticeMessage)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Section {
+                    Button(settings.strings.continueButton) {
+                        onAcknowledge()
+                        dismiss()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+            .navigationTitle(settings.strings.pairingSafetyNoticeTitle)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .interactiveDismissDisabled()
+    }
+}
+
+struct ExistingICloudDataRecoverySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var settings
+    @State private var isRunningAction = false
+    @State private var actionError: String?
+    let onDelete: () async throws -> Void
+    let onKeep: () async throws -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(settings.strings.existingICloudDataPromptMessage)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let actionError {
+                        Text(actionError)
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        runAction(onDelete)
+                    } label: {
+                        if isRunningAction {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        } else {
+                            Text(settings.strings.deleteICloudDataButton)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                    .disabled(isRunningAction)
+
+                    Button(settings.strings.continueExistingICloudDataButton) {
+                        runAction(onKeep)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .disabled(isRunningAction)
+                }
+            }
+            .navigationTitle(settings.strings.existingICloudDataPromptTitle)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .interactiveDismissDisabled(isRunningAction)
+    }
+
+    private func runAction(_ action: @escaping () async throws -> Void) {
+        guard !isRunningAction else { return }
+        isRunningAction = true
+        actionError = nil
+        Task {
+            do {
+                try await action()
+                await MainActor.run {
+                    isRunningAction = false
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isRunningAction = false
+                    actionError = error.localizedDescription
+                }
+            }
         }
     }
 }
@@ -160,9 +598,11 @@ enum CalendarSheet: Identifiable {
 
 struct CalendarTabView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(SettingsStore.self) private var settings
     @Environment(AppServices.self) private var services
     @Binding var focusRequest: CalendarFocusRequest?
+    let onOpenSettings: (SettingsFocusTarget) -> Void
     @Query(sort: \EventMirror.startDate) private var mirrors: [EventMirror]
     @Query(sort: \EventInvitation.startDate) private var invitations: [EventInvitation]
     @State private var selectedDate = Date()
@@ -171,6 +611,7 @@ struct CalendarTabView: View {
     @State private var focusedJointEventID: String?
     @State private var activeCalendarSheet: CalendarSheet?
     @State private var localDisplayMirrors: [EventMirror] = []
+    @State private var authorizationState: CalendarAuthorizationState = .unknown
 
     var activeMirrors: [EventMirror] {
         mirrors.filter { $0.deletedAt == nil }
@@ -224,7 +665,8 @@ struct CalendarTabView: View {
     }
 
     var partnerEvents: [EventMirror] {
-        visibleOrdinaryMirrors.filter { $0.ownerMemberID == settings.partnerShareOwnerID }
+        guard let partnerOwnerID = settings.partnerShareOwnerID else { return [] }
+        return visibleOrdinaryMirrors.filter { $0.ownerMemberID == partnerOwnerID }
     }
 
     var visibleMirrorByID: [String: EventMirror] {
@@ -261,6 +703,20 @@ struct CalendarTabView: View {
         "\(mode.rawValue):\(Int(visibleInterval.start.timeIntervalSince1970)):\(Int(visibleInterval.end.timeIntervalSince1970)):\(settings.currentLocalOwnerID)"
     }
 
+    var setupGuidanceStep: CalendarSetupGuidanceStep? {
+        CalendarSetupGuidancePlan.step(
+            hasCompletedInitialProfilePrompt: settings.hasCompletedInitialProfilePrompt,
+            currentDisplayName: settings.currentDisplayName,
+            authorizationState: authorizationState,
+            selectedCalendarIDs: settings.selectedCalendarIDs,
+            pairingStatus: PairingSettingsPlan.status(
+                hasStartedPairing: settings.hasStartedPairing,
+                outgoingParticipantIDs: settings.outgoingShareParticipantIDs,
+                incomingOwnerID: settings.partnerShareOwnerID
+            )
+        )
+    }
+
     var body: some View {
         let strings = settings.strings
 
@@ -294,12 +750,16 @@ struct CalendarTabView: View {
                     .padding(.horizontal)
             }
 
-            if localDisplayMirrors.isEmpty && visiblePartnerMirrors.isEmpty && acceptedJointEvents.isEmpty {
-                ShareCalEmptyState(allowsSampleData: !isPaired) {
-                    loadReviewSampleData()
+            if let setupGuidanceStep {
+                CalendarSetupGuidanceCard(step: setupGuidanceStep) {
+                    onOpenSettings(settingsFocusTarget(for: setupGuidanceStep))
                 }
                 .padding(.horizontal)
                 .frame(maxHeight: .infinity, alignment: .center)
+            } else if localDisplayMirrors.isEmpty && visiblePartnerMirrors.isEmpty && visibleJointEvents.isEmpty {
+                ShareCalEmptyState()
+                    .padding(.horizontal)
+                    .frame(maxHeight: .infinity, alignment: .center)
             } else {
                 GeometryReader { proxy in
                     switch mode {
@@ -344,8 +804,13 @@ struct CalendarTabView: View {
             EventDetailView(event: event)
         }
         .onAppear {
+            refreshAuthorizationState()
             consumeFocusRequestIfNeeded()
             refreshLocalDisplayMirrors()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            refreshAuthorizationState()
         }
         .onChange(of: focusRequest) { _, _ in
             consumeFocusRequestIfNeeded()
@@ -355,28 +820,25 @@ struct CalendarTabView: View {
         }
     }
 
-    private func loadReviewSampleData() {
-        selectedDate = Date()
-        if activeMirrors.contains(where: { $0.sourceCalendarID == ShareCalReviewSampleData.sourceCalendarID }) {
-            return
-        }
-
-        let sample = ShareCalReviewSampleData.build(
-            currentMemberID: settings.currentLocalOwnerID,
-            partnerMemberID: settings.partnerOwnerIDForLocalData
-        )
-        sample.mirrors.forEach(modelContext.insert)
-        sample.invitations.forEach(modelContext.insert)
-        sample.comments.forEach(modelContext.insert)
-        try? modelContext.save()
-    }
-
     private func consumeFocusRequestIfNeeded() {
         guard let request = focusRequest else { return }
         selectedDate = request.startDate
         mode = .day
         focusedJointEventID = request.invitationID
         focusRequest = nil
+    }
+
+    private func refreshAuthorizationState() {
+        authorizationState = services.calendarAccess.authorizationState()
+    }
+
+    private func settingsFocusTarget(for guidanceStep: CalendarSetupGuidanceStep) -> SettingsFocusTarget {
+        switch guidanceStep {
+        case .calendarAccess:
+            return .calendarAccess
+        case .pairing:
+            return .pairing
+        }
     }
 
     private func syncNow() {
@@ -447,6 +909,17 @@ struct CompactCalendarTopBar: View {
                 .accessibilityLabel(settings.strings.selectDateAccessibilityLabel)
                 .accessibilityValue(title)
                 .accessibilityIdentifier("compact-date-picker-button")
+
+                Button(settings.strings.todayButton) {
+                    selectedDate = Calendar.current.startOfDay(for: Date())
+                }
+                .font(.caption2.weight(.semibold))
+                .frame(width: 54, height: 34)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .disabled(Calendar.current.isDateInToday(selectedDate))
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("compact-today-button")
 
                 CompactIconButton(
                     systemName: "chevron.right",
@@ -630,19 +1103,90 @@ struct CalendarPairingStatusLine: View {
 
 struct ShareCalEmptyState: View {
     @Environment(SettingsStore.self) private var settings
-    let allowsSampleData: Bool
-    let onLoadSampleData: () -> Void
 
     var body: some View {
         ContentUnavailableView {
-            Label(settings.strings.noSharedSchedulesTitle, systemImage: "calendar.badge.plus")
+            Label(settings.strings.noSharedSchedulesTitle, systemImage: "calendar")
         } description: {
             Text(settings.strings.noSharedSchedulesDescription)
-        } actions: {
-            if allowsSampleData {
-                Button(settings.strings.loadSampleScheduleButton, action: onLoadSampleData)
-                    .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+struct CalendarSetupGuidanceCard: View {
+    @Environment(SettingsStore.self) private var settings
+    let step: CalendarSetupGuidanceStep
+    let onPrimaryAction: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: iconName)
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title2.weight(.bold))
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            Button(action: onPrimaryAction) {
+                Label(buttonTitle, systemImage: buttonIconName)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("calendar-setup-guidance-button")
+        }
+        .padding(.vertical, 24)
+        .frame(maxWidth: 420)
+    }
+
+    private var title: String {
+        switch step {
+        case .calendarAccess:
+            return settings.strings.setupCalendarAccessTitle
+        case .pairing:
+            return settings.strings.setupPairingTitle
+        }
+    }
+
+    private var message: String {
+        switch step {
+        case .calendarAccess:
+            return settings.strings.setupCalendarAccessMessage
+        case .pairing:
+            return settings.strings.setupPairingMessage
+        }
+    }
+
+    private var buttonTitle: String {
+        switch step {
+        case .calendarAccess:
+            return settings.strings.setupCalendarAccessButton
+        case .pairing:
+            return settings.strings.setupPairingButton
+        }
+    }
+
+    private var iconName: String {
+        switch step {
+        case .calendarAccess:
+            return "calendar.badge.checkmark"
+        case .pairing:
+            return "person.2.badge.plus"
+        }
+    }
+
+    private var buttonIconName: String {
+        switch step {
+        case .calendarAccess:
+            return "gearshape"
+        case .pairing:
+            return "person.badge.plus"
         }
     }
 }
@@ -2359,7 +2903,10 @@ struct InvitesTabView: View {
     let openInCalendar: (EventInvitation) -> Void
 
     private var pendingIncomingAccessRequests: [CalendarAccessRequest] {
-        CalendarAccessRequestListPlan.pendingIncoming(accessRequests)
+        CalendarAccessRequestListPlan.pendingIncoming(
+            accessRequests,
+            currentMemberID: settings.currentLocalOwnerID
+        )
     }
 
     var body: some View {
@@ -2372,6 +2919,7 @@ struct InvitesTabView: View {
                     ForEach(pendingIncomingAccessRequests) { request in
                         HistoryRequestRow(
                             request: request,
+                            requesterDisplayName: displayName(forRequesterMemberID: request.requesterMemberID),
                             rangeText: accessRequestRangeText(for: request)
                         ) {
                             update(request, status: .approved)
@@ -2536,11 +3084,19 @@ struct InvitesTabView: View {
         let end = displayedEndDate.formatted(date: .abbreviated, time: .omitted)
         return "\(start) - \(end)"
     }
+
+    private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
+        if requesterMemberID == settings.currentLocalOwnerID {
+            return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
+        }
+        return settings.partnerStatusDisplayName
+    }
 }
 
 struct HistoryRequestRow: View {
     @Environment(SettingsStore.self) private var settings
     let request: CalendarAccessRequest
+    let requesterDisplayName: String
     let rangeText: String
     let approve: () -> Void
     let decline: () -> Void
@@ -2550,7 +3106,7 @@ struct HistoryRequestRow: View {
 
         VStack(alignment: .leading, spacing: 8) {
             Text(strings.incomingHistoryRequestText(
-                requester: request.requesterMemberID,
+                requester: requesterDisplayName,
                 rangeText: rangeText
             ))
             .font(.subheadline.weight(.semibold))
@@ -2639,6 +3195,8 @@ struct PairingStatusCard: View {
     let onSync: () -> Void
     let onRequestHistory: () -> Void
     let onUnpair: () -> Void
+    let onOpenSharedPeople: () -> Void
+    let onHideCloudKitDiagnostic: () -> Void
 
     var body: some View {
         let strings = settings.strings
@@ -2667,6 +3225,8 @@ struct PairingStatusCard: View {
                 pairingInProgressContent(strings: strings)
             }
 
+            sharedPeopleContent(strings: strings)
+
             if !isCloudKitEnabled {
                 Text(strings.iCloudSharingUnavailableLocalBuild)
                     .font(.caption)
@@ -2674,10 +3234,27 @@ struct PairingStatusCard: View {
             }
 
             if let cloudKitDiagnosticMessage {
-                Text(cloudKitDiagnosticMessage)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(strings.diagnosticsTitle)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            onHideCloudKitDiagnostic()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.semibold))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(strings.cancelButton)
+                    }
+                    Text(cloudKitDiagnosticMessage)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
         }
         .padding(16)
@@ -2688,6 +3265,42 @@ struct PairingStatusCard: View {
                 .stroke(Color(.separator).opacity(0.24), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func sharedPeopleContent(strings: ShareCalStrings) -> some View {
+        let canOpenOfficialSharing = SharedPeoplePresentationPlan.canOpenOfficialSharing(
+            isCloudKitEnabled: isCloudKitEnabled,
+            isPreparingShare: isPreparingShare,
+            isStoppingShare: isStoppingShare
+        )
+
+        return Button {
+            onOpenSharedPeople()
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(strings.sharedPeopleTitle, systemImage: "person.2")
+                        .font(.subheadline.weight(.semibold))
+                    Text(strings.sharedPeopleDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                if isPreparingShare {
+                    ProgressView()
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!canOpenOfficialSharing)
+        .accessibilityIdentifier("shared-people-official-share-button")
     }
 
     private func notPairedContent(strings: ShareCalStrings) -> some View {
@@ -3000,6 +3613,7 @@ struct SettingsTabView: View {
     @Environment(\.openURL) private var openURL
     @Environment(SettingsStore.self) private var settings
     @Environment(AppServices.self) private var services
+    @Binding var focus: SettingsFocusTarget?
     @Query(sort: \CalendarAccessRequest.createdAt) private var accessRequests: [CalendarAccessRequest]
     @State private var authorizationState: CalendarAuthorizationState = .unknown
     @State private var calendars: [CalendarDescriptor] = []
@@ -3021,6 +3635,7 @@ struct SettingsTabView: View {
     @State private var showDeleteAcceptedSharedZonesConfirmation = false
     @State private var showOldSharedCalendarsCleanupPrompt = false
     @State private var promptedOldSharedOwnerSignature: String?
+    @State private var acceptedSharedOwnerIDsPendingDeletion: [String] = []
     @State private var oldSharedCalendarsMessage: String?
 
     private var calendarAccessButtonTitle: String {
@@ -3036,7 +3651,10 @@ struct SettingsTabView: View {
     }
 
     private var pendingIncomingAccessRequests: [CalendarAccessRequest] {
-        CalendarAccessRequestListPlan.pendingIncoming(accessRequests)
+        CalendarAccessRequestListPlan.pendingIncoming(
+            accessRequests,
+            currentMemberID: settings.currentLocalOwnerID
+        )
     }
 
     private var outgoingAccessRequests: [CalendarAccessRequest] {
@@ -3128,40 +3746,59 @@ struct SettingsTabView: View {
         @Bindable var settings = settings
         let strings = settings.strings
 
-        List {
-            Section {
-                PairingStatusCard(
-                    status: pairingStatus,
-                    pairingDate: settings.pairingDate,
-                    partnerNickname: settings.partnerDisplayName,
-                    myCalendarScopeValue: myCalendarScopeValue,
-                    partnerCalendarScopeValue: partnerCalendarScopeValue,
-                    prePairingHistoryScopeValue: prePairingHistoryScopeValue,
-                    isCloudKitEnabled: services.isCloudKitEnabled,
-                    isPreparingShare: isPreparingShare,
-                    isCheckingCloudKitAccount: isCheckingCloudKitAccount,
-                    isSyncing: settings.syncPhase == .syncing,
-                    isStoppingShare: isStoppingShare,
-                    cloudKitDiagnosticMessage: cloudKitDiagnosticMessage,
-                    onStartPairing: {
-                        Task { await prepareShare() }
-                    },
-                    onCheckCloudKitStatus: {
-                        Task { await checkCloudKitStatus() }
-                    },
-                    onSync: {
-                        syncNow()
-                    },
-                    onRequestHistory: {
-                        ensurePairingDateIfNeeded()
-                        activeSettingsSheet = .historyRequest
-                    },
-                    onUnpair: {
-                        showStopSharingConfirmation = true
-                    }
-                )
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
+        ScrollViewReader { proxy in
+            List {
+                Section {
+                    PairingStatusCard(
+                        status: pairingStatus,
+                        pairingDate: settings.pairingDate,
+                        partnerNickname: settings.partnerStatusDisplayName,
+                        myCalendarScopeValue: myCalendarScopeValue,
+                        partnerCalendarScopeValue: partnerCalendarScopeValue,
+                        prePairingHistoryScopeValue: prePairingHistoryScopeValue,
+                        isCloudKitEnabled: services.isCloudKitEnabled,
+                        isPreparingShare: isPreparingShare,
+                        isCheckingCloudKitAccount: isCheckingCloudKitAccount,
+                        isSyncing: settings.syncPhase == .syncing,
+                        isStoppingShare: isStoppingShare,
+                        cloudKitDiagnosticMessage: cloudKitDiagnosticMessage,
+                        onStartPairing: {
+                            Task { await prepareShare() }
+                        },
+                        onCheckCloudKitStatus: {
+                            Task { await checkCloudKitStatus() }
+                        },
+                        onSync: {
+                            syncNow()
+                        },
+                        onRequestHistory: {
+                            ensurePairingDateIfNeeded()
+                            activeSettingsSheet = .historyRequest
+                        },
+                        onUnpair: {
+                            showStopSharingConfirmation = true
+                        },
+                        onOpenSharedPeople: {
+                            Task { await prepareShare() }
+                        },
+                        onHideCloudKitDiagnostic: {
+                            cloudKitDiagnosticMessage = nil
+                        }
+                    )
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowBackground(Color.clear)
+                }
+                .id(SettingsFocusTarget.pairing)
+
+            if PairingSafetyEducationPlan.shouldShowPersistentWarning(pairingStatus: pairingStatus) {
+                Section(strings.pairingSafetySection) {
+                    Text(strings.pairingSafetyPersistentWarningTitle)
+                        .font(.subheadline.weight(.semibold))
+                    Text(strings.pairingSafetyPersistentWarningMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if !settings.inactiveSharedOwnerIDs.isEmpty || oldSharedCalendarsMessage != nil {
@@ -3173,6 +3810,7 @@ struct SettingsTabView: View {
                             strings.cleanupOldSharedCalendarsButton(isDeleting: isDeletingAcceptedSharedZones),
                             role: .destructive
                         ) {
+                            acceptedSharedOwnerIDsPendingDeletion = settings.inactiveSharedOwnerIDs
                             showDeleteAcceptedSharedZonesConfirmation = true
                         }
                         .disabled(!services.isCloudKitEnabled || isDeletingAcceptedSharedZones)
@@ -3221,6 +3859,7 @@ struct SettingsTabView: View {
                 Button(calendarAccessButtonTitle) {
                     Task { await requestAccess() }
                 }
+                .accessibilityIdentifier("settings-calendar-access-button")
                 .disabled(isRequestingCalendarAccess || authorizationState.canReadEvents)
                 if isRequestingCalendarAccess {
                     HStack {
@@ -3238,6 +3877,7 @@ struct SettingsTabView: View {
                     refreshCalendars()
                 }
             }
+            .id(SettingsFocusTarget.calendarAccess)
 
             Section(strings.calendarsToShareSection) {
                 if ShareCalCalendarBootstrapPlan.shouldOfferCreation(calendars: calendars) {
@@ -3281,7 +3921,7 @@ struct SettingsTabView: View {
                     ForEach(pendingIncomingAccessRequests) { request in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(strings.incomingHistoryRequestText(
-                                requester: request.requesterMemberID,
+                                requester: displayName(forRequesterMemberID: request.requesterMemberID),
                                 rangeText: accessRequestRangeText(for: request)
                             ))
                             .font(.subheadline.weight(.semibold))
@@ -3343,6 +3983,10 @@ struct SettingsTabView: View {
             refreshCalendars()
             ensurePairingDateIfNeeded()
             presentOldSharedCalendarsPromptIfNeeded()
+            consumeSettingsFocus(with: proxy)
+        }
+        .onChange(of: focus) { _, _ in
+            consumeSettingsFocus(with: proxy)
         }
         .onChange(of: pairingStatus) { _, _ in
             presentOldSharedCalendarsPromptIfNeeded()
@@ -3354,9 +3998,15 @@ struct SettingsTabView: View {
             presentOldSharedCalendarsPromptIfNeeded()
         }
         .sheet(item: $preparedShare) { share in
-            CloudSharingController(preparedShare: share) { message in
-                errorMessage = strings.cloudKitShareFailed(message)
-            }
+            CloudSharingController(
+                preparedShare: share,
+                onError: { message in
+                    errorMessage = strings.cloudKitShareFailed(message)
+                },
+                onStoppedSharing: {
+                    clearLocalPairingAfterSharingStopped()
+                }
+            )
         }
         .sheet(item: $activeSettingsSheet) { sheet in
             switch sheet {
@@ -3379,7 +4029,8 @@ struct SettingsTabView: View {
         }
         .alert(strings.oldSharedCalendarsCleanupPromptTitle, isPresented: $showOldSharedCalendarsCleanupPrompt) {
             Button(strings.cleanupOldSharedCalendarsButton(isDeleting: false), role: .destructive) {
-                Task { await deleteAcceptedSharedZones() }
+                acceptedSharedOwnerIDsPendingDeletion = settings.inactiveSharedOwnerIDs
+                Task { await deleteAcceptedSharedZones(ownerIDs: acceptedSharedOwnerIDsPendingDeletion) }
             }
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
@@ -3387,7 +4038,7 @@ struct SettingsTabView: View {
         }
         .alert(strings.cleanupOldSharedCalendarsConfirmationTitle, isPresented: $showDeleteAcceptedSharedZonesConfirmation) {
             Button(strings.cleanupOldSharedCalendarsButton(isDeleting: false), role: .destructive) {
-                Task { await deleteAcceptedSharedZones() }
+                Task { await deleteAcceptedSharedZones(ownerIDs: acceptedSharedOwnerIDsPendingDeletion) }
             }
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
@@ -3400,6 +4051,17 @@ struct SettingsTabView: View {
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
             Text(strings.deleteICloudDataConfirmationMessage)
+        }
+    }
+    }
+
+    private func consumeSettingsFocus(with proxy: ScrollViewProxy) {
+        guard let focus else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(focus, anchor: .top)
+            }
+            self.focus = nil
         }
     }
 
@@ -3605,6 +4267,13 @@ struct SettingsTabView: View {
         return "\(start) - \(end)"
     }
 
+    private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
+        if requesterMemberID == settings.currentLocalOwnerID {
+            return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
+        }
+        return settings.partnerStatusDisplayName
+    }
+
     @MainActor
     private func prepareShare() async {
         guard !isPreparingShare else { return }
@@ -3665,6 +4334,44 @@ struct SettingsTabView: View {
     }
 
     @MainActor
+    private func clearLocalPairingAfterSharingStopped() {
+        let localOwnerIDsToPurge = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            legacyPartnerMemberID: settings.partnerNoteName
+        )
+        var purgeError: Error?
+        do {
+            try ShareCalLocalDataCleanupService.purgeSharedOwnerMirrors(
+                ownerMemberIDs: localOwnerIDsToPurge,
+                modelContext: modelContext
+            )
+        } catch {
+            purgeError = error
+        }
+
+        preparedShare = nil
+        cloudKitDiagnosticMessage = nil
+        settings.iCloudSharingEnabled = false
+        settings.hasStartedPairing = false
+        settings.partnerShareOwnerID = nil
+        settings.partnerNoteName = ""
+        settings.hasPromptedPartnerNoteForCurrentPairing = false
+        settings.hasShownPairingSafetyNoticeForCurrentPairing = false
+        settings.partnerSyncedDisplayName = nil
+        settings.partnerICloudEmailAddresses = []
+        settings.outgoingShareParticipantIDs = []
+        settings.clearPairingID()
+        settings.inactiveSharedOwnerIDs = []
+        settings.clearPairingDate()
+
+        if let purgeError {
+            errorMessage = purgeError.localizedDescription
+        } else {
+            errorMessage = settings.strings.unpairSucceeded
+        }
+    }
+
+    @MainActor
     private func stopSharing() async {
         guard !isStoppingShare else { return }
         errorMessage = nil
@@ -3677,32 +4384,15 @@ struct SettingsTabView: View {
         defer { isStoppingShare = false }
 
         do {
-            let localOwnerIDsToPurge = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
-                partnerShareOwnerID: settings.partnerShareOwnerID,
-                legacyPartnerMemberID: settings.partnerNoteName
-            )
             try await cloudKit.stopSharing(ownerMemberID: settings.currentLocalOwnerID)
-            try ShareCalLocalDataCleanupService.purgeSharedOwnerMirrors(
-                ownerMemberIDs: localOwnerIDsToPurge,
-                modelContext: modelContext
-            )
-            settings.iCloudSharingEnabled = false
-            settings.hasStartedPairing = false
-            settings.partnerShareOwnerID = nil
-            settings.partnerSyncedDisplayName = nil
-            settings.partnerICloudEmailAddresses = []
-            settings.outgoingShareParticipantIDs = []
-            settings.clearPairingID()
-            settings.inactiveSharedOwnerIDs = []
-            settings.clearPairingDate()
-            errorMessage = settings.strings.unpairSucceeded
+            clearLocalPairingAfterSharingStopped()
         } catch {
             errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
         }
     }
 
     @MainActor
-    private func deleteAcceptedSharedZones() async {
+    private func deleteAcceptedSharedZones(ownerIDs requestedOwnerIDs: [String]) async {
         guard !isDeletingAcceptedSharedZones else { return }
         errorMessage = nil
         oldSharedCalendarsMessage = nil
@@ -3711,7 +4401,7 @@ struct SettingsTabView: View {
             return
         }
 
-        let ownerIDs = settings.inactiveSharedOwnerIDs
+        let ownerIDs = Array(Set(requestedOwnerIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
         guard !ownerIDs.isEmpty else { return }
 
         isDeletingAcceptedSharedZones = true
@@ -3723,7 +4413,9 @@ struct SettingsTabView: View {
                 ownerMemberIDs: Set(ownerIDs),
                 modelContext: modelContext
             )
-            settings.inactiveSharedOwnerIDs = []
+            let removedOwnerIDs = Set(ownerIDs)
+            settings.inactiveSharedOwnerIDs = settings.inactiveSharedOwnerIDs.filter { !removedOwnerIDs.contains($0) }
+            acceptedSharedOwnerIDsPendingDeletion = []
             oldSharedCalendarsMessage = settings.strings.cleanupOldSharedCalendarsSucceeded
             syncNow()
         } catch {
@@ -3750,6 +4442,9 @@ struct SettingsTabView: View {
             settings.iCloudSharingEnabled = false
             settings.hasStartedPairing = false
             settings.partnerShareOwnerID = nil
+            settings.partnerNoteName = ""
+            settings.hasPromptedPartnerNoteForCurrentPairing = false
+            settings.hasShownPairingSafetyNoticeForCurrentPairing = false
             settings.partnerSyncedDisplayName = nil
             settings.partnerICloudEmailAddresses = []
             settings.outgoingShareParticipantIDs = []
