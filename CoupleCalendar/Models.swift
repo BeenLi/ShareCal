@@ -181,7 +181,6 @@ struct ShareCalStrings {
     var pairingSection: String { text("Pairing", "配对") }
     var pairingPartnerLabel: String { text("Pairing Partner", "配对对象") }
     var partnerNicknameLabel: String { text("Nickname", "昵称") }
-    var partnerICloudIdentityLabel: String { text("iCloud Identity", "iCloud 身份") }
     var sharingMyCalendarLabel: String { text("Sharing My Calendar", "我共享给对方") }
     var partnersCalendarLabel: String { text("Partner's Calendar", "对方共享给我") }
     var pairingDayLabel: String { text("Pairing Date", "配对日") }
@@ -195,7 +194,6 @@ struct ShareCalStrings {
     func historyAuthorizedFromValue(_ date: Date) -> String {
         text("Authorized from \(pairingDateText(for: date))", "已授权自 \(pairingDateText(for: date))")
     }
-    var noICloudSharingIdentity: String { text("Not connected", "未连接") }
     var pairingDescription: String {
         text(
             "After pairing, you can share calendars with each other from the pairing date. This version supports one pairing partner.",
@@ -246,7 +244,6 @@ struct ShareCalStrings {
         )
     }
     var unpairSucceeded: String { text("Unpaired.", "已解除配对。") }
-    var oldSharedCalendarsSection: String { text("Old Shared Calendars", "旧共享") }
     var sharedPeopleTitle: String { text("Shared People", "共享人") }
     var sharedPeopleDescription: String {
         text(
@@ -264,32 +261,43 @@ struct ShareCalStrings {
             "ShareCal 的 iCloud 共享数据与本地日历是隔离的。删除 ShareCal 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
         )
     }
-    var oldSharedCalendarsCleanupPromptTitle: String {
-        text("Old Shared Calendars Found", "发现旧共享")
-    }
-    var oldSharedCalendarsCleanupPromptMessage: String {
+    var pairingConflictTitle: String { text("Pairing Conflict", "配对冲突") }
+    var pairingConflictMismatchMessage: String {
         text(
-            "Your current pairing is active, but this device still has old accepted ShareCal shares. You can remove them now or later from Settings.",
-            "当前配对已生效，但本设备仍有旧的 ShareCal accepted share。你可以现在移除，也可以稍后在设置中处理。"
+            "The person who joined your calendar is not the person whose calendar you accepted. Choose who to keep as your partner; the other connection will be removed.",
+            "加入你日历的人和你接受的日历分享者不是同一个人。请选择保留哪一位作为伴侣，另一个连接将被移除。"
         )
     }
-    var cleanupOldSharedCalendarsConfirmationTitle: String {
-        text("Remove Old Shared Calendars?", "移除旧共享？")
-    }
-    var cleanupOldSharedCalendarsConfirmationMessage: String {
+    var pairingConflictMultipleIncomingMessage: String {
         text(
-            "This removes old accepted ShareCal shares from this device. It will not delete your original Calendar events or your current pairing.",
-            "这会从本设备移除旧的 ShareCal accepted share。它不会删除系统日历中的原始日程，也不会删除当前配对。"
+            "You have accepted calendar shares from more than one person. Choose who to keep as your partner; the other shares will be removed.",
+            "你接受了多个人的日历分享。请选择保留哪一位作为伴侣，其余分享将被移除。"
         )
     }
-    var cleanupOldSharedCalendarsSucceeded: String { text("Old shared calendars removed.", "旧共享已移除。") }
+    var pairingConflictMultipleOutgoingMessage: String {
+        text(
+            "More than one person has joined your calendar share. Choose who to keep as your partner; the others will be removed.",
+            "有多个人加入了你的日历分享。请选择保留哪一位作为伴侣，其余成员将被移除。"
+        )
+    }
+    func keepPartnerButton(_ name: String) -> String {
+        text("Keep \(name)", "保留 \(name)")
+    }
+    var pairingReplacementTitle: String { text("Replace Current Pairing?", "更换配对对象？") }
+    func pairingReplacementMessage(currentPartner: String) -> String {
+        text(
+            "You are already paired with \(currentPartner). Accepting this new invitation will remove the current pairing and pair you with the new person instead.",
+            "你已与 \(currentPartner) 配对。接受这个新邀请将解除当前配对，改为与新的对象配对。"
+        )
+    }
+    var pairingReplacementConfirmButton: String { text("Replace Pairing", "更换配对") }
     var deleteICloudDataButton: String { text("Delete My iCloud Data", "删除我的 iCloud 数据") }
     var deletingICloudDataButton: String { text("Deleting My iCloud Data...", "正在删除我的 iCloud 数据...") }
     var deleteICloudDataConfirmationTitle: String { text("Delete My iCloud Data?", "删除我的 iCloud 数据？") }
     var deleteICloudDataConfirmationMessage: String {
         text(
-            "This stops sharing, deletes your ShareCal iCloud data, and clears the local ShareCal cache. It will not delete original events from the system Calendar app.",
-            "这会停止共享、删除你上传到 iCloud 的 ShareCal 数据，并清除本地 ShareCal 缓存。它不会删除系统日历中的原始日程。"
+            "This stops sharing, deletes your ShareCal iCloud data, leaves your partner's share, and clears the local ShareCal cache. It will not delete original events from the system Calendar app.",
+            "这会停止共享、删除你上传到 iCloud 的 ShareCal 数据、退出对方的共享，并清除本地 ShareCal 缓存。它不会删除系统日历中的原始日程。"
         )
     }
     var deleteICloudDataSucceeded: String { text("iCloud data deleted.", "iCloud 数据已删除。") }
@@ -475,17 +483,6 @@ struct ShareCalStrings {
         }
     }
 
-    func oldSharedCalendarsDescription(count: Int) -> String {
-        text(
-            "\(count) old accepted ShareCal share(s) are ignored by the current pairing.",
-            "当前配对已忽略 \(count) 个旧 ShareCal accepted share。"
-        )
-    }
-
-    func cleanupOldSharedCalendarsButton(isDeleting: Bool) -> String {
-        isDeleting ? text("Removing Old Shares...", "正在移除旧共享...") : text("Remove Old Shares", "移除旧共享")
-    }
-
     func invitationConflictMessage(eventTitle: String, timeText: String, additionalConflictCount: Int) -> String {
         let suffix: String
         if additionalConflictCount > 0 {
@@ -510,16 +507,16 @@ struct ShareCalStrings {
 enum ShareCalAcceptedShareSignal {
     static let notificationName = Notification.Name("ShareCalAcceptedCloudKitShare")
     private static let pendingSyncKey = "ShareCalPendingAcceptedCloudKitShareSync"
-    private static let pendingPartnerICloudEmailAddressKey = "ShareCalPendingAcceptedPartnerICloudEmailAddress"
+    private static let pendingPartnerOwnerIDKey = "ShareCalPendingAcceptedPartnerOwnerID"
 
     static func markAccepted(
-        partnerICloudEmailAddress: String? = nil,
+        partnerOwnerID: String?,
         defaults: UserDefaults = .standard,
         notificationCenter: NotificationCenter = .default
     ) {
         defaults.set(true, forKey: pendingSyncKey)
-        if let partnerICloudEmailAddress = ICloudSharingIdentityDisplayPlan.normalizedEmailAddress(partnerICloudEmailAddress) {
-            defaults.set(partnerICloudEmailAddress, forKey: pendingPartnerICloudEmailAddressKey)
+        if let partnerOwnerID, !partnerOwnerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            defaults.set(partnerOwnerID, forKey: pendingPartnerOwnerIDKey)
         }
         notificationCenter.post(name: notificationName, object: nil)
     }
@@ -534,12 +531,12 @@ enum ShareCalAcceptedShareSignal {
         return true
     }
 
-    static func consumePendingPartnerICloudEmailAddress(defaults: UserDefaults = .standard) -> String? {
-        let emailAddress = ICloudSharingIdentityDisplayPlan.normalizedEmailAddress(
-            defaults.string(forKey: pendingPartnerICloudEmailAddressKey)
-        )
-        defaults.removeObject(forKey: pendingPartnerICloudEmailAddressKey)
-        return emailAddress
+    static func consumePendingPartnerOwnerID(defaults: UserDefaults = .standard) -> String? {
+        let ownerID = defaults.string(forKey: pendingPartnerOwnerIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        defaults.removeObject(forKey: pendingPartnerOwnerIDKey)
+        guard let ownerID, !ownerID.isEmpty else { return nil }
+        return ownerID
     }
 }
 
@@ -1370,49 +1367,10 @@ enum PendingActionBadgePlan {
     }
 }
 
-enum ICloudSharingIdentityDisplayPlan {
-    static func displayValue(for identifiers: [String], emptyValue: String) -> String {
-        let normalizedIdentifiers = identifiers
-            .compactMap(normalizedEmailAddress)
-        var seenIdentifiers = Set<String>()
-        let uniqueIdentifiers = normalizedIdentifiers.filter { seenIdentifiers.insert($0).inserted }
-        guard !uniqueIdentifiers.isEmpty else { return emptyValue }
-        return uniqueIdentifiers.joined(separator: ", ")
-    }
-
-    static func displayValue(for identifier: String?, emptyValue: String) -> String {
-        displayValue(for: [identifier].compactMap { $0 }, emptyValue: emptyValue)
-    }
-
-    static func emailAddresses(merging existingValues: [String], _ newValues: [String]) -> [String] {
-        var seenEmailAddresses = Set<String>()
-        return (existingValues + newValues)
-            .compactMap(normalizedEmailAddress)
-            .filter { seenEmailAddresses.insert($0).inserted }
-    }
-
-    static func normalizedEmailAddress(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedValue.isEmpty else { return nil }
-        let parts = trimmedValue.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2, !parts[0].isEmpty, parts[1].contains("."), !parts[1].hasSuffix(".") else {
-            return nil
-        }
-        return trimmedValue
-    }
-}
-
 enum ICloudSharingTeardownPlan {
-    static func localOwnerIDsToPurge(
-        partnerShareOwnerID: String?,
-        legacyPartnerMemberID: String
-    ) -> Set<String> {
+    static func localOwnerIDsToPurge(partnerShareOwnerID: String?) -> Set<String> {
         var ownerIDs = Set([partnerShareOwnerID].compactMap { normalizedID($0) })
-        if let legacyID = normalizedID(legacyPartnerMemberID) {
-            ownerIDs.insert(legacyID)
-        }
-        ownerIDs.insert("partner")
+        ownerIDs.insert(SettingsStore.unknownPartnerID)
         return ownerIDs
     }
 
@@ -1476,29 +1434,9 @@ enum PairingSettingsPlan {
         normalizedID(incomingOwnerID) == nil ? .unavailable : .on
     }
 
-    static func partnerIdentity(
-        incomingOwnerID: String?,
-        outgoingParticipantIDs: [String],
-        partnerICloudEmailAddresses: [String] = [],
-        emptyValue: String
-    ) -> String {
-        let storedEmailDisplayValue = ICloudSharingIdentityDisplayPlan.displayValue(
-            for: partnerICloudEmailAddresses,
-            emptyValue: ""
-        )
-        if !storedEmailDisplayValue.isEmpty {
-            return storedEmailDisplayValue
-        }
-        return ICloudSharingIdentityDisplayPlan.displayValue(
-            for: outgoingParticipantIDs,
-            emptyValue: emptyValue
-        )
-    }
-
     static func partnerDisplayName(
         partnerNoteName: String?,
         partnerSyncedDisplayName: String?,
-        partnerICloudIdentity: String,
         fallback: String
     ) -> String {
         if let noteName = normalizedID(partnerNoteName) {
@@ -1507,24 +1445,16 @@ enum PairingSettingsPlan {
         if let syncedDisplayName = normalizedID(partnerSyncedDisplayName) {
             return syncedDisplayName
         }
-        if isReadableICloudIdentity(partnerICloudIdentity) {
-            return partnerICloudIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
         return fallback
     }
 
     static func partnerStatusDisplayName(
         partnerNoteName: String?,
         partnerSyncedDisplayName: String?,
-        partnerICloudIdentity: String,
         fallback: String,
         language: AppLanguage
     ) -> String {
-        let displayName = partnerDisplayBaseName(
-            partnerSyncedDisplayName: partnerSyncedDisplayName,
-            partnerICloudIdentity: partnerICloudIdentity,
-            fallback: fallback
-        )
+        let displayName = normalizedID(partnerSyncedDisplayName) ?? fallback
         guard let noteName = normalizedID(partnerNoteName),
               noteName != displayName else {
             return displayName
@@ -1544,20 +1474,6 @@ enum PairingSettingsPlan {
         normalizedID(displayName)
     }
 
-    private static func partnerDisplayBaseName(
-        partnerSyncedDisplayName: String?,
-        partnerICloudIdentity: String,
-        fallback: String
-    ) -> String {
-        if let syncedDisplayName = normalizedID(partnerSyncedDisplayName) {
-            return syncedDisplayName
-        }
-        if isReadableICloudIdentity(partnerICloudIdentity) {
-            return partnerICloudIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return fallback
-    }
-
     private static func normalizedIDs(_ ids: [String]) -> [String] {
         ids.compactMap(normalizedID)
     }
@@ -1566,28 +1482,6 @@ enum PairingSettingsPlan {
         guard let id else { return nil }
         let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedID.isEmpty ? nil : trimmedID
-    }
-
-    private static func isReadableICloudIdentity(_ value: String) -> Bool {
-        let identities = value
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return !identities.isEmpty && identities.allSatisfy {
-            ICloudSharingIdentityDisplayPlan.normalizedEmailAddress($0) != nil
-        }
-    }
-}
-
-enum OldSharedCalendarsCleanupPromptPlan {
-    static func shouldPresent(
-        pairingStatus: PairingStatus,
-        inactiveSharedOwnerIDs: [String],
-        hasPresentedPrompt: Bool
-    ) -> Bool {
-        pairingStatus == .paired
-            && !inactiveSharedOwnerIDs.isEmpty
-            && !hasPresentedPrompt
     }
 }
 
@@ -1622,8 +1516,6 @@ enum ExistingICloudDataRecoveryPlan {
         hasStartedPairing: Bool,
         partnerShareOwnerID: String?,
         outgoingShareParticipantIDs: [String],
-        pairingID: String?,
-        inactiveSharedOwnerIDs: [String],
         lastSyncAt: Date?
     ) -> Bool {
         guard hasCompletedInitialProfilePrompt else { return false }
@@ -1632,8 +1524,6 @@ enum ExistingICloudDataRecoveryPlan {
             hasStartedPairing: hasStartedPairing,
             partnerShareOwnerID: partnerShareOwnerID,
             outgoingShareParticipantIDs: outgoingShareParticipantIDs,
-            pairingID: pairingID,
-            inactiveSharedOwnerIDs: inactiveSharedOwnerIDs,
             lastSyncAt: lastSyncAt
         ) else { return false }
         return snapshot.hasRecoverableData
@@ -1644,8 +1534,6 @@ enum ExistingICloudDataRecoveryPlan {
         hasStartedPairing: Bool,
         partnerShareOwnerID: String?,
         outgoingShareParticipantIDs: [String],
-        pairingID: String?,
-        inactiveSharedOwnerIDs: [String],
         lastSyncAt: Date?
     ) -> Bool {
         guard !hasResolvedPrompt else { return false }
@@ -1653,8 +1541,6 @@ enum ExistingICloudDataRecoveryPlan {
             hasStartedPairing: hasStartedPairing,
             partnerShareOwnerID: partnerShareOwnerID,
             outgoingShareParticipantIDs: outgoingShareParticipantIDs,
-            pairingID: pairingID,
-            inactiveSharedOwnerIDs: inactiveSharedOwnerIDs,
             lastSyncAt: lastSyncAt
         )
     }
@@ -1663,15 +1549,11 @@ enum ExistingICloudDataRecoveryPlan {
         hasStartedPairing: Bool,
         partnerShareOwnerID: String?,
         outgoingShareParticipantIDs: [String],
-        pairingID: String?,
-        inactiveSharedOwnerIDs: [String],
         lastSyncAt: Date?
     ) -> Bool {
         guard !hasStartedPairing else { return false }
         guard normalizedID(partnerShareOwnerID) == nil else { return false }
         guard !outgoingShareParticipantIDs.contains(where: { normalizedID($0) != nil }) else { return false }
-        guard normalizedID(pairingID) == nil else { return false }
-        guard inactiveSharedOwnerIDs.allSatisfy({ normalizedID($0) == nil }) else { return false }
         return lastSyncAt == nil
     }
 
@@ -1708,43 +1590,114 @@ enum SharedPeoplePresentationPlan {
     }
 }
 
-enum LegacyPairingIDMigrationPlan {
-    static func partnerOwnerIDsForSelection(
-        partnerShareOwnerID: String?,
-        outgoingParticipantIDs: [String],
-        hasStartedPairing: Bool
-    ) -> [String] {
-        if let partnerShareOwnerID = normalizedID(partnerShareOwnerID) {
-            return [partnerShareOwnerID]
+enum TwoPersonPairingConflict: Equatable, Codable {
+    case outgoingIncomingMismatch(outgoingIDs: [String], incomingOwnerIDs: [String])
+    case multipleIncomingShares(ownerIDs: [String])
+    case multipleOutgoingParticipants(participantIDs: [String])
+}
+
+/// The single decision point for two-person pairing. The partner is the iCloud
+/// user (CloudKit userRecordID) who owns the accepted shared zone, verified
+/// against the accepted participant of my outgoing share.
+enum TwoPersonPairingPlan {
+    struct Resolution: Equatable {
+        /// Owner of the active incoming shared zone; nil while waiting for the
+        /// partner to share back (or when unpaired).
+        let partnerID: String?
+        let sharedZoneOwnerIDsToLeave: [String]
+        let conflict: TwoPersonPairingConflict?
+
+        static func partner(_ partnerID: String?, leaving ownerIDs: [String] = []) -> Resolution {
+            Resolution(partnerID: partnerID, sharedZoneOwnerIDsToLeave: ownerIDs, conflict: nil)
         }
 
-        guard hasStartedPairing else { return [] }
-        let outgoingIDs = normalizedUniqueIDs(outgoingParticipantIDs)
-        return outgoingIDs.count == 1 ? outgoingIDs : []
+        static func conflicted(_ conflict: TwoPersonPairingConflict) -> Resolution {
+            Resolution(partnerID: nil, sharedZoneOwnerIDsToLeave: [], conflict: conflict)
+        }
     }
 
-    static func shouldGeneratePairingID(
-        currentPairingID: String?,
-        hasStartedPairing: Bool,
-        partnerShareOwnerID: String?,
-        outgoingParticipantIDs: [String],
+    static func resolve(
+        storedPartnerID: String?,
+        outgoingAcceptedParticipantIDs: [String],
         sharedZoneOwnerIDs: [String]
-    ) -> Bool {
-        guard normalizedID(currentPairingID) == nil else { return false }
-        let partnerOwnerIDs = Set(
-            partnerOwnerIDsForSelection(
-                partnerShareOwnerID: partnerShareOwnerID,
-                outgoingParticipantIDs: outgoingParticipantIDs,
-                hasStartedPairing: hasStartedPairing
-            )
+    ) -> Resolution {
+        let storedPartnerID = normalizedID(storedPartnerID)
+        // Only CloudKit user record names (always "_"-prefixed) can be compared
+        // against zone owner names; other identifier forms are display-only.
+        let outgoingIDs = uniqueSorted(outgoingAcceptedParticipantIDs).filter { $0.hasPrefix("_") }
+        let incomingOwnerIDs = uniqueSorted(sharedZoneOwnerIDs)
+
+        let mutualIDs = incomingOwnerIDs.filter { outgoingIDs.contains($0) }
+        if mutualIDs.count == 1, let partnerID = mutualIDs.first {
+            return .partner(partnerID, leaving: incomingOwnerIDs.filter { $0 != partnerID })
+        }
+        if mutualIDs.count > 1 {
+            return .conflicted(.multipleIncomingShares(ownerIDs: mutualIDs))
+        }
+
+        if incomingOwnerIDs.isEmpty {
+            if outgoingIDs.count > 1, storedPartnerID.map({ !outgoingIDs.contains($0) }) ?? true {
+                return .conflicted(.multipleOutgoingParticipants(participantIDs: outgoingIDs))
+            }
+            return .partner(nil)
+        }
+
+        if outgoingIDs.isEmpty {
+            if let storedPartnerID, incomingOwnerIDs.contains(storedPartnerID) {
+                return .partner(storedPartnerID, leaving: incomingOwnerIDs.filter { $0 != storedPartnerID })
+            }
+            if incomingOwnerIDs.count == 1 {
+                return .partner(incomingOwnerIDs[0])
+            }
+            return .conflicted(.multipleIncomingShares(ownerIDs: incomingOwnerIDs))
+        }
+
+        return .conflicted(
+            .outgoingIncomingMismatch(outgoingIDs: outgoingIDs, incomingOwnerIDs: incomingOwnerIDs)
         )
-        guard !partnerOwnerIDs.isEmpty else { return false }
-        let sharedOwnerIDs = Set(normalizedUniqueIDs(sharedZoneOwnerIDs))
-        return !partnerOwnerIDs.isDisjoint(with: sharedOwnerIDs)
     }
 
-    private static func normalizedUniqueIDs(_ ids: [String]) -> [String] {
+    private static func uniqueSorted(_ ids: [String]) -> [String] {
         Array(Set(ids.compactMap(normalizedID))).sorted()
+    }
+
+    private static func normalizedID(_ id: String?) -> String? {
+        guard let id else { return nil }
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedID.isEmpty ? nil : trimmedID
+    }
+}
+
+enum TwoPersonPairingConflictPresentationPlan {
+    /// The people the user can choose between when resolving a conflict, in
+    /// stable display order.
+    static func candidateIDs(_ conflict: TwoPersonPairingConflict) -> [String] {
+        switch conflict {
+        case .outgoingIncomingMismatch(let outgoingIDs, let incomingOwnerIDs):
+            return (outgoingIDs + incomingOwnerIDs).reduce(into: [String]()) { result, id in
+                if !result.contains(id) { result.append(id) }
+            }
+        case .multipleIncomingShares(let ownerIDs):
+            return ownerIDs
+        case .multipleOutgoingParticipants(let participantIDs):
+            return participantIDs
+        }
+    }
+}
+
+enum ShareAcceptanceGuardPlan {
+    static func requiresReplacementConfirmation(
+        incomingOwnerID: String,
+        storedPartnerID: String?,
+        outgoingParticipantIDs: [String]
+    ) -> Bool {
+        let incomingOwnerID = incomingOwnerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incomingOwnerID.isEmpty else { return false }
+        if let storedPartnerID = normalizedID(storedPartnerID) {
+            return storedPartnerID != incomingOwnerID
+        }
+        let outgoingIDs = Set(outgoingParticipantIDs.compactMap(normalizedID).filter { $0.hasPrefix("_") })
+        return !outgoingIDs.isEmpty && !outgoingIDs.contains(incomingOwnerID)
     }
 
     private static func normalizedID(_ id: String?) -> String? {
@@ -2054,6 +2007,9 @@ enum CloudKitMirrorSyncPlan {
                   let existingShadow = existingShadowByID[mirror.mirrorKey] else {
                 return true
             }
+            // A shadow without an upload confirmation was recorded by a sync
+            // that never reached CloudKit (e.g. before pairing).
+            guard existingShadow.lastUploadedAt != nil else { return true }
             return activeShadow.fingerprint != existingShadow.fingerprint
                 || activeShadow.cloudKitRecordName != existingShadow.cloudKitRecordName
                 || activeShadow.isTombstone != existingShadow.isTombstone
@@ -2259,8 +2215,6 @@ final class SyncState {
 
 @MainActor
 enum ShareCalLocalDataCleanupService {
-    private static let legacyReviewSampleSourceCalendarID = "sharecal-preview"
-
     static func purge(modelContext: ModelContext) throws {
         try deleteAll(CoupleSpace.self, modelContext: modelContext)
         try deleteAll(EventMirror.self, modelContext: modelContext)
@@ -2327,30 +2281,6 @@ enum ShareCalLocalDataCleanupService {
             where ownerMemberIDs.contains(request.requesterMemberID)
                 || ownerMemberIDs.contains(request.ownerMemberID) {
             modelContext.delete(request)
-        }
-
-        try modelContext.save()
-    }
-
-    static func purgeReviewSampleData(modelContext: ModelContext) throws {
-        let existingMirrors = try modelContext.fetch(FetchDescriptor<EventMirror>())
-        let sampleMirrorIDs = Set(
-            existingMirrors
-                .filter { $0.sourceCalendarID == legacyReviewSampleSourceCalendarID }
-                .map(\.id)
-        )
-        for mirror in existingMirrors where sampleMirrorIDs.contains(mirror.id) {
-            modelContext.delete(mirror)
-        }
-
-        let existingInvitations = try modelContext.fetch(FetchDescriptor<EventInvitation>())
-        for invitation in existingInvitations where invitation.id.hasPrefix("\(legacyReviewSampleSourceCalendarID):") {
-            modelContext.delete(invitation)
-        }
-
-        let existingComments = try modelContext.fetch(FetchDescriptor<EventComment>())
-        for comment in existingComments where comment.id.hasPrefix("\(legacyReviewSampleSourceCalendarID):") || sampleMirrorIDs.contains(comment.eventMirrorID) {
-            modelContext.delete(comment)
         }
 
         try modelContext.save()

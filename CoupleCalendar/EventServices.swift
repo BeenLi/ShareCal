@@ -63,7 +63,7 @@ struct EventMirrorService {
     func makeShadows(
         from events: [CalendarSourceEvent],
         selectedCalendarIDs: Set<String>,
-        uploadedAt: Date,
+        uploadedAt: Date?,
         sharingWindows: [DateInterval]? = nil
     ) -> [LocalEventShadow] {
         events

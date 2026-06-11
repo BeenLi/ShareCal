@@ -44,6 +44,8 @@ struct RootView: View {
     @State private var settingsFocus: SettingsFocusTarget?
     @State private var activeRootSheet: RootSheet?
     @State private var hasEvaluatedExistingICloudDataPrompt = false
+    @State private var pendingReplacementOwnerID: String?
+    @State private var showPairingConflictAlert = false
     @Query(sort: \EventInvitation.startDate) private var invitations: [EventInvitation]
     @Query(sort: \CalendarAccessRequest.createdAt) private var accessRequests: [CalendarAccessRequest]
 
@@ -59,7 +61,7 @@ struct RootView: View {
         PendingActionBadgePlan.count(
             invitations: invitations,
             accessRequests: accessRequests,
-            currentMemberID: settings.currentLocalOwnerID
+            currentMemberID: settings.currentMemberID
         )
     }
 
@@ -106,6 +108,7 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ShareCalAcceptedShareSignal.notificationName)) { _ in
             Task {
+                checkPendingShareReplacement()
                 await syncAfterAcceptedShareIfNeeded()
             }
         }
@@ -168,6 +171,160 @@ struct RootView: View {
                 }
             }
         }
+        .alert(
+            settings.strings.pairingReplacementTitle,
+            isPresented: Binding(
+                get: { pendingReplacementOwnerID != nil },
+                set: { if !$0 { pendingReplacementOwnerID = nil } }
+            )
+        ) {
+            Button(settings.strings.pairingReplacementConfirmButton, role: .destructive) {
+                Task { await confirmShareReplacement() }
+            }
+            Button(settings.strings.cancelButton, role: .cancel) {
+                cancelShareReplacement()
+            }
+        } message: {
+            Text(settings.strings.pairingReplacementMessage(currentPartner: settings.partnerStatusDisplayName))
+        }
+        .alert(settings.strings.pairingConflictTitle, isPresented: $showPairingConflictAlert) {
+            if let conflict = settings.pairingConflict {
+                ForEach(TwoPersonPairingConflictPresentationPlan.candidateIDs(conflict), id: \.self) { candidateID in
+                    Button(settings.strings.keepPartnerButton(conflictCandidateDisplayName(candidateID))) {
+                        Task { await resolvePairingConflict(keeping: candidateID, conflict: conflict) }
+                    }
+                }
+            }
+            Button(settings.strings.cancelButton, role: .cancel) {}
+        } message: {
+            Text(pairingConflictMessage)
+        }
+        .onChange(of: settings.pairingConflict) { _, newConflict in
+            showPairingConflictAlert = newConflict != nil
+        }
+    }
+
+    private var pairingConflictMessage: String {
+        switch settings.pairingConflict {
+        case .outgoingIncomingMismatch:
+            settings.strings.pairingConflictMismatchMessage
+        case .multipleIncomingShares:
+            settings.strings.pairingConflictMultipleIncomingMessage
+        case .multipleOutgoingParticipants:
+            settings.strings.pairingConflictMultipleOutgoingMessage
+        case nil:
+            ""
+        }
+    }
+
+    private func conflictCandidateDisplayName(_ candidateID: String) -> String {
+        if candidateID == settings.partnerShareOwnerID {
+            return settings.partnerDisplayName
+        }
+        return String(candidateID.suffix(8))
+    }
+
+    @MainActor
+    private func checkPendingShareReplacement() {
+        if let incomingOwnerID = ShareCalPendingShareReplacement.incomingOwnerID {
+            pendingReplacementOwnerID = incomingOwnerID
+        }
+    }
+
+    /// `onChange` alone misses two cases: a persisted conflict at launch (no
+    /// change event fires for the initial value) and a re-detected identical
+    /// conflict after the user cancelled (Equatable-same values don't fire).
+    @MainActor
+    private func representPairingConflictIfNeeded() {
+        if settings.pairingConflict != nil {
+            showPairingConflictAlert = true
+        }
+    }
+
+    @MainActor
+    private func cancelShareReplacement() {
+        ShareCalPendingShareReplacement.clear()
+        pendingReplacementOwnerID = nil
+    }
+
+    @MainActor
+    private func confirmShareReplacement() async {
+        guard let pending = ShareCalPendingShareReplacement.consume() else {
+            pendingReplacementOwnerID = nil
+            return
+        }
+        pendingReplacementOwnerID = nil
+        guard let cloudKit = services.cloudKitIfAvailable else { return }
+
+        do {
+            let ownerIDsToPurge = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
+                partnerShareOwnerID: settings.partnerShareOwnerID
+            )
+            if let oldPartnerID = settings.partnerShareOwnerID {
+                try await cloudKit.deleteAcceptedSharedZones(ownerIDs: [oldPartnerID])
+            }
+            try await cloudKit.removeOutgoingShareParticipants(keeping: pending.incomingOwnerID)
+            try ShareCalLocalDataCleanupService.purgeSharedOwnerData(
+                ownerMemberIDs: ownerIDsToPurge,
+                modelContext: modelContext
+            )
+            settings.partnerShareOwnerID = nil
+            settings.partnerSyncedDisplayName = nil
+            settings.partnerNoteName = ""
+            settings.hasPromptedPartnerNoteForCurrentPairing = false
+            settings.hasShownPairingSafetyNoticeForCurrentPairing = false
+            settings.pairingConflict = nil
+            settings.clearPairingDate()
+
+            try await cloudKit.acceptShare(metadata: pending.metadata)
+            ShareCalAcceptedShareSignal.markAccepted(partnerOwnerID: pending.incomingOwnerID)
+            await syncAfterAcceptedShareIfNeeded()
+        } catch {
+            settings.lastSyncError = CloudKitSharingFailureMessage.userFacingMessage(for: error)
+        }
+    }
+
+    @MainActor
+    private func resolvePairingConflict(
+        keeping keptID: String,
+        conflict: TwoPersonPairingConflict
+    ) async {
+        guard let cloudKit = services.cloudKitIfAvailable else { return }
+        do {
+            switch conflict {
+            case .outgoingIncomingMismatch(_, let incomingOwnerIDs):
+                // Whoever is kept: every other participant leaves my share, and
+                // every incoming zone not owned by the kept person is left.
+                try await cloudKit.removeOutgoingShareParticipants(keeping: keptID)
+                try await leaveSharedZones(
+                    ownerIDs: incomingOwnerIDs.filter { $0 != keptID },
+                    cloudKit: cloudKit
+                )
+                settings.partnerShareOwnerID = incomingOwnerIDs.contains(keptID) ? keptID : nil
+            case .multipleIncomingShares(let ownerIDs):
+                try await leaveSharedZones(ownerIDs: ownerIDs.filter { $0 != keptID }, cloudKit: cloudKit)
+                settings.partnerShareOwnerID = keptID
+            case .multipleOutgoingParticipants:
+                try await cloudKit.removeOutgoingShareParticipants(keeping: keptID)
+            }
+            settings.pairingConflict = nil
+            await runForegroundSync(consumingAcceptedShareSignal: false, forceCloudKit: true)
+        } catch {
+            settings.lastSyncError = CloudKitSharingFailureMessage.userFacingMessage(for: error)
+        }
+    }
+
+    @MainActor
+    private func leaveSharedZones(
+        ownerIDs: [String],
+        cloudKit: CloudKitCoupleSpaceService
+    ) async throws {
+        guard !ownerIDs.isEmpty else { return }
+        try await cloudKit.deleteAcceptedSharedZones(ownerIDs: ownerIDs)
+        try ShareCalLocalDataCleanupService.purgeSharedOwnerData(
+            ownerMemberIDs: Set(ownerIDs),
+            modelContext: modelContext
+        )
     }
 
     private var shouldDeferAutomaticSyncForExistingICloudDecision: Bool {
@@ -176,8 +333,6 @@ struct RootView: View {
             hasStartedPairing: settings.hasStartedPairing,
             partnerShareOwnerID: settings.partnerShareOwnerID,
             outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
-            pairingID: settings.pairingID,
-            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
             lastSyncAt: settings.lastSyncAt
         ) && (!hasEvaluatedExistingICloudDataPrompt || activeRootSheet == .existingICloudDataRecovery)
     }
@@ -226,8 +381,6 @@ struct RootView: View {
             hasStartedPairing: settings.hasStartedPairing,
             partnerShareOwnerID: settings.partnerShareOwnerID,
             outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
-            pairingID: settings.pairingID,
-            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
             lastSyncAt: settings.lastSyncAt
         )
         guard shouldProbe else {
@@ -253,8 +406,6 @@ struct RootView: View {
             hasStartedPairing: settings.hasStartedPairing,
             partnerShareOwnerID: settings.partnerShareOwnerID,
             outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
-            pairingID: settings.pairingID,
-            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
             lastSyncAt: settings.lastSyncAt
         ) {
             activeRootSheet = .existingICloudDataRecovery
@@ -265,10 +416,12 @@ struct RootView: View {
 
     @MainActor
     private func reevaluateRootSheetFlow() async {
+        purgeLegacyLocalDataIfNeeded()
+        checkPendingShareReplacement()
+        representPairingConflictIfNeeded()
         presentInitialProfilePromptIfNeeded()
         guard activeRootSheet == nil else { return }
         await syncAfterAcceptedShareIfNeeded()
-        purgeLegacyReviewSampleData()
         await presentExistingICloudDataPromptIfNeeded()
         presentPartnerNotePromptIfNeeded()
         presentPairingSafetyNoticeIfNeeded()
@@ -305,10 +458,9 @@ struct RootView: View {
         if consumingAcceptedShareSignal {
             guard ShareCalAcceptedShareSignal.consumePending() else { return false }
             settings.iCloudSharingEnabled = true
-            settings.partnerICloudEmailAddresses = ICloudSharingIdentityDisplayPlan.emailAddresses(
-                merging: settings.partnerICloudEmailAddresses,
-                [ShareCalAcceptedShareSignal.consumePendingPartnerICloudEmailAddress()].compactMap { $0 }
-            )
+            if let partnerOwnerID = ShareCalAcceptedShareSignal.consumePendingPartnerOwnerID() {
+                settings.partnerShareOwnerID = partnerOwnerID
+            }
         }
 
         isRunningForegroundSync = true
@@ -324,7 +476,7 @@ struct RootView: View {
             settings: settings,
             forceCloudKit: consumingAcceptedShareSignal || forceCloudKit
         )
-        purgeLegacyReviewSampleData()
+        representPairingConflictIfNeeded()
         return true
     }
 
@@ -354,7 +506,7 @@ struct RootView: View {
             )
         }
 
-        try await cloudKit.deleteICloudData(ownerMemberID: settings.currentLocalOwnerID)
+        try await cloudKit.deleteICloudData(ownerMemberID: settings.currentMemberID)
         try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
         settings.iCloudSharingEnabled = false
         settings.hasStartedPairing = false
@@ -363,10 +515,8 @@ struct RootView: View {
         settings.hasPromptedPartnerNoteForCurrentPairing = false
         settings.hasShownPairingSafetyNoticeForCurrentPairing = false
         settings.partnerSyncedDisplayName = nil
-        settings.partnerICloudEmailAddresses = []
         settings.outgoingShareParticipantIDs = []
-        settings.clearPairingID()
-        settings.inactiveSharedOwnerIDs = []
+        settings.pairingConflict = nil
         settings.clearPairingDate()
         settings.lastSyncAt = nil
         settings.lastSyncError = nil
@@ -374,10 +524,13 @@ struct RootView: View {
         settings.hasResolvedExistingICloudDataPrompt = true
     }
 
+    /// One-time SwiftData wipe after the legacy local-owner-UUID state reset:
+    /// cached mirrors/comments are keyed by the old identity and re-sync cleanly.
     @MainActor
-    private func purgeLegacyReviewSampleData() {
+    private func purgeLegacyLocalDataIfNeeded() {
+        guard settings.consumeLegacyLocalDataPurgeFlag() else { return }
         do {
-            try ShareCalLocalDataCleanupService.purgeReviewSampleData(modelContext: modelContext)
+            try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
         } catch {
             settings.lastSyncError = error.localizedDescription
         }
@@ -616,7 +769,7 @@ struct CalendarTabView: View {
     var activeMirrors: [EventMirror] {
         mirrors.filter { mirror in
             guard mirror.deletedAt == nil else { return false }
-            if mirror.ownerMemberID == settings.currentLocalOwnerID {
+            if mirror.ownerMemberID == settings.currentMemberID {
                 return settings.selectedCalendarIDs.contains(mirror.sourceCalendarID)
             }
             return true
@@ -634,7 +787,7 @@ struct CalendarTabView: View {
     var visibleMirrors: [EventMirror] {
         CalendarMirrorVisibilityPlan.memberMirrors(
             activeMirrors,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             partnerShareOwnerID: settings.partnerShareOwnerID
         ).filter { mirror in
             visibleInterval.contains(mirror.startDate)
@@ -644,7 +797,7 @@ struct CalendarTabView: View {
     var acceptedJointEvents: [JointScheduleEvent] {
         JointSchedulePlan.jointEvents(
             from: invitations,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             partnerMemberID: settings.partnerOwnerIDForLocalData
         )
     }
@@ -663,7 +816,7 @@ struct CalendarTabView: View {
     }
 
     var myEvents: [EventMirror] {
-        visibleOrdinaryMirrors.filter { $0.ownerMemberID == settings.currentLocalOwnerID }
+        visibleOrdinaryMirrors.filter { $0.ownerMemberID == settings.currentMemberID }
     }
 
     var visiblePartnerMirrors: [EventMirror] {
@@ -684,7 +837,7 @@ struct CalendarTabView: View {
             containing: selectedDate,
             mirrors: visibleOrdinaryMirrors,
             jointEvents: visibleJointEvents,
-            currentMemberID: settings.currentLocalOwnerID
+            currentMemberID: settings.currentMemberID
         )
     }
 
@@ -706,7 +859,7 @@ struct CalendarTabView: View {
     }
 
     var localDisplayRefreshKey: String {
-        "\(mode.rawValue):\(Int(visibleInterval.start.timeIntervalSince1970)):\(Int(visibleInterval.end.timeIntervalSince1970)):\(settings.currentLocalOwnerID)"
+        "\(mode.rawValue):\(Int(visibleInterval.start.timeIntervalSince1970)):\(Int(visibleInterval.end.timeIntervalSince1970)):\(settings.currentMemberID)"
     }
 
     var setupGuidanceStep: CalendarSetupGuidanceStep? {
@@ -867,7 +1020,7 @@ struct CalendarTabView: View {
         let selectedCalendarIDs = settings.selectedCalendarIDs
         localDisplayMirrors = CalendarDisplayMirrorPlan.displayMirrors(
             from: sourceEvents.filter { selectedCalendarIDs.contains($0.calendarIdentifier) },
-            ownerMemberID: settings.currentLocalOwnerID
+            ownerMemberID: settings.currentMemberID
         )
     }
 }
@@ -2554,7 +2707,7 @@ struct CreateInviteView: View {
             if !skipConflictCheck {
                 let candidate = try CreateInvitePlan.conflictCandidateMirror(
                     from: draft,
-                    ownerMemberID: settings.currentLocalOwnerID
+                    ownerMemberID: settings.currentMemberID
                 )
                 let conflicts = InvitationConflictPlan.conflicts(
                     for: candidate,
@@ -2578,11 +2731,11 @@ struct CreateInviteView: View {
             let mirror = try CreateInvitePlan.mirror(
                 from: draft,
                 createdEvent: createdEvent,
-                ownerMemberID: settings.currentLocalOwnerID
+                ownerMemberID: settings.currentMemberID
             )
             let invitation = try CreateInvitePlan.invitation(
                 from: draft,
-                creatorMemberID: settings.currentLocalOwnerID,
+                creatorMemberID: settings.currentMemberID,
                 inviteeMemberID: settings.partnerOwnerIDForLocalData
             )
             invitation.createdLocalEventID = createdEvent.eventIdentifier
@@ -2608,12 +2761,9 @@ struct CreateInviteView: View {
 
             Task {
                 do {
-                    try await cloudKit.ensureShareRoot(
-                        ownerMemberID: settings.currentLocalOwnerID,
-                        pairingID: settings.pairingID
-                    )
+                    try await cloudKit.ensureShareRoot(ownerMemberID: settings.currentMemberID)
                     try await cloudKit.saveMirrorsForSync([mirror])
-                    try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentLocalOwnerID)
+                    try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
                     dismiss()
                 } catch {
                     errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
@@ -2699,7 +2849,7 @@ struct EventDetailView: View {
         NavigationStack {
             List {
                 Section {
-                    LabeledContent(strings.ownerLabel, value: event.ownerMemberID == settings.currentLocalOwnerID ? strings.meTitle : strings.partnerTitle)
+                    LabeledContent(strings.ownerLabel, value: event.ownerMemberID == settings.currentMemberID ? strings.meTitle : strings.partnerTitle)
                     LabeledContent(strings.calendarLabel, value: event.sourceCalendarTitle)
                     LabeledContent(strings.startsLabel, value: strings.abbreviatedDateTimeText(event.startDate))
                     LabeledContent(strings.endsLabel, value: strings.abbreviatedDateTimeText(event.endDate))
@@ -2827,7 +2977,7 @@ struct EventDetailView: View {
         inviteError = nil
         inviteSuccessMessage = nil
         let invitation = EventInvitation(
-            creatorMemberID: settings.currentLocalOwnerID,
+            creatorMemberID: settings.currentMemberID,
             inviteeMemberID: settings.partnerOwnerIDForLocalData,
             title: event.title,
             startDate: event.startDate,
@@ -2843,7 +2993,7 @@ struct EventDetailView: View {
             if let cloudKit = services.cloudKitIfAvailable {
                 Task {
                     do {
-                        try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentLocalOwnerID)
+                        try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
                         inviteSuccessMessage = settings.strings.invitationSentMessage
                     } catch {
                         inviteError = CloudKitSharingFailureMessage.userFacingMessage(for: error)
@@ -2870,14 +3020,14 @@ struct EventDetailView: View {
     private func addComment() {
         let comment = services.commentService.createComment(
             eventMirrorID: event.id,
-            authorMemberID: settings.currentLocalOwnerID,
+            authorMemberID: settings.currentMemberID,
             body: commentBody
         )
         modelContext.insert(comment)
         do {
             try modelContext.save()
             let eventOwnerMemberID = event.ownerMemberID
-            let currentMemberID = settings.currentLocalOwnerID
+            let currentMemberID = settings.currentMemberID
             let eventRecordName = event.cloudKitRecordName ?? event.mirrorKey
             if let cloudKit = services.cloudKitIfAvailable {
                 Task {
@@ -2912,7 +3062,7 @@ struct InvitesTabView: View {
     private var pendingIncomingAccessRequests: [CalendarAccessRequest] {
         CalendarAccessRequestListPlan.pendingIncoming(
             accessRequests,
-            currentMemberID: settings.currentLocalOwnerID
+            currentMemberID: settings.currentMemberID
         )
     }
 
@@ -2942,7 +3092,7 @@ struct InvitesTabView: View {
                 if !filtered.isEmpty {
                     Section(strings.invitationStatusTitle(for: status)) {
                         ForEach(filtered) { invitation in
-                            InvitationRow(invitation: invitation, currentMemberID: settings.currentLocalOwnerID) {
+                            InvitationRow(invitation: invitation, currentMemberID: settings.currentMemberID) {
                                 accept(invitation)
                             } decline: {
                                 decline(invitation)
@@ -2985,7 +3135,7 @@ struct InvitesTabView: View {
             let mirror = AcceptedInvitationMirrorPlan.mirror(
                 from: invitation,
                 createdEvent: createdEvent,
-                ownerMemberID: settings.currentLocalOwnerID
+                ownerMemberID: settings.currentMemberID
             )
             try upsertAcceptedMirror(mirror)
             settings.selectedCalendarIDs = ShareCalCalendarBootstrapPlan.selectedCalendarIDs(
@@ -3054,7 +3204,7 @@ struct InvitesTabView: View {
         guard let cloudKit = services.cloudKitIfAvailable else { return }
         Task {
             do {
-                try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentLocalOwnerID)
+                try await cloudKit.saveInvitationForSync(invitation, currentMemberID: settings.currentMemberID)
             } catch {
                 errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
             }
@@ -3077,7 +3227,7 @@ struct InvitesTabView: View {
             do {
                 try await cloudKit.saveCalendarAccessRequestForSync(
                     request,
-                    currentMemberID: settings.currentLocalOwnerID
+                    currentMemberID: settings.currentMemberID
                 )
             } catch {
                 errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
@@ -3093,7 +3243,7 @@ struct InvitesTabView: View {
     }
 
     private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
-        if requesterMemberID == settings.currentLocalOwnerID {
+        if requesterMemberID == settings.currentMemberID {
             return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
         }
         return settings.partnerStatusDisplayName
@@ -3634,16 +3784,10 @@ struct SettingsTabView: View {
     @State private var isPreparingShare = false
     @State private var isStoppingShare = false
     @State private var isDeletingICloudData = false
-    @State private var isDeletingAcceptedSharedZones = false
     @State private var activeSharePreparationID: UUID?
     @State private var activeSettingsSheet: SettingsSheet?
     @State private var showStopSharingConfirmation = false
     @State private var showDeleteICloudDataConfirmation = false
-    @State private var showDeleteAcceptedSharedZonesConfirmation = false
-    @State private var showOldSharedCalendarsCleanupPrompt = false
-    @State private var promptedOldSharedOwnerSignature: String?
-    @State private var acceptedSharedOwnerIDsPendingDeletion: [String] = []
-    @State private var oldSharedCalendarsMessage: String?
 
     private var calendarAccessButtonTitle: String {
         let strings = settings.strings
@@ -3660,12 +3804,12 @@ struct SettingsTabView: View {
     private var pendingIncomingAccessRequests: [CalendarAccessRequest] {
         CalendarAccessRequestListPlan.pendingIncoming(
             accessRequests,
-            currentMemberID: settings.currentLocalOwnerID
+            currentMemberID: settings.currentMemberID
         )
     }
 
     private var outgoingAccessRequests: [CalendarAccessRequest] {
-        CalendarAccessRequestListPlan.outgoing(accessRequests, currentMemberID: settings.currentLocalOwnerID)
+        CalendarAccessRequestListPlan.outgoing(accessRequests, currentMemberID: settings.currentMemberID)
     }
 
     private var pairingStatus: PairingStatus {
@@ -3704,7 +3848,7 @@ struct SettingsTabView: View {
         let authorizedStartDate = PrePairingHistoryAccessPlan.contiguousAuthorizedStartDate(
             pairingDate: normalizedPairingDate,
             accessRequests: accessRequests,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             ownerMemberID: ownerMemberIDForPartnerHistory,
             direction: .partnerSharedToMe,
             calendar: calendar
@@ -3720,7 +3864,7 @@ struct SettingsTabView: View {
         return PrePairingHistoryAccessPlan.defaultNextRequestRange(
             pairingDate: pairingDate,
             accessRequests: accessRequests,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             ownerMemberID: ownerMemberIDForPartnerHistory
         )
     }
@@ -3738,7 +3882,7 @@ struct SettingsTabView: View {
         let authorizedStartDate = PrePairingHistoryAccessPlan.contiguousAuthorizedStartDate(
             pairingDate: normalizedPairingDate,
             accessRequests: accessRequests,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             ownerMemberID: ownerMemberID,
             direction: direction,
             calendar: calendar
@@ -3805,28 +3949,6 @@ struct SettingsTabView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if !settings.inactiveSharedOwnerIDs.isEmpty || oldSharedCalendarsMessage != nil {
-                Section(strings.oldSharedCalendarsSection) {
-                    if !settings.inactiveSharedOwnerIDs.isEmpty {
-                        Text(strings.oldSharedCalendarsDescription(count: settings.inactiveSharedOwnerIDs.count))
-                            .foregroundStyle(.secondary)
-                        Button(
-                            strings.cleanupOldSharedCalendarsButton(isDeleting: isDeletingAcceptedSharedZones),
-                            role: .destructive
-                        ) {
-                            acceptedSharedOwnerIDsPendingDeletion = settings.inactiveSharedOwnerIDs
-                            showDeleteAcceptedSharedZonesConfirmation = true
-                        }
-                        .disabled(!services.isCloudKitEnabled || isDeletingAcceptedSharedZones)
-                    }
-                    if let oldSharedCalendarsMessage {
-                        Text(oldSharedCalendarsMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
 
@@ -3989,20 +4111,10 @@ struct SettingsTabView: View {
             authorizationState = services.calendarAccess.authorizationState()
             refreshCalendars()
             ensurePairingDateIfNeeded()
-            presentOldSharedCalendarsPromptIfNeeded()
             consumeSettingsFocus(with: proxy)
         }
         .onChange(of: focus) { _, _ in
             consumeSettingsFocus(with: proxy)
-        }
-        .onChange(of: pairingStatus) { _, _ in
-            presentOldSharedCalendarsPromptIfNeeded()
-        }
-        .onChange(of: settings.inactiveSharedOwnerIDs) { _, newOwnerIDs in
-            if newOwnerIDs.isEmpty {
-                promptedOldSharedOwnerSignature = nil
-            }
-            presentOldSharedCalendarsPromptIfNeeded()
         }
         .sheet(item: $preparedShare) { share in
             CloudSharingController(
@@ -4033,23 +4145,6 @@ struct SettingsTabView: View {
             Button(strings.cancelButton, role: .cancel) {}
         } message: {
             Text(strings.unpairConfirmationMessage)
-        }
-        .alert(strings.oldSharedCalendarsCleanupPromptTitle, isPresented: $showOldSharedCalendarsCleanupPrompt) {
-            Button(strings.cleanupOldSharedCalendarsButton(isDeleting: false), role: .destructive) {
-                acceptedSharedOwnerIDsPendingDeletion = settings.inactiveSharedOwnerIDs
-                Task { await deleteAcceptedSharedZones(ownerIDs: acceptedSharedOwnerIDsPendingDeletion) }
-            }
-            Button(strings.cancelButton, role: .cancel) {}
-        } message: {
-            Text(strings.oldSharedCalendarsCleanupPromptMessage)
-        }
-        .alert(strings.cleanupOldSharedCalendarsConfirmationTitle, isPresented: $showDeleteAcceptedSharedZonesConfirmation) {
-            Button(strings.cleanupOldSharedCalendarsButton(isDeleting: false), role: .destructive) {
-                Task { await deleteAcceptedSharedZones(ownerIDs: acceptedSharedOwnerIDsPendingDeletion) }
-            }
-            Button(strings.cancelButton, role: .cancel) {}
-        } message: {
-            Text(strings.cleanupOldSharedCalendarsConfirmationMessage)
         }
         .alert(strings.deleteICloudDataConfirmationTitle, isPresented: $showDeleteICloudDataConfirmation) {
             Button(strings.deleteICloudDataButton, role: .destructive) {
@@ -4163,19 +4258,6 @@ struct SettingsTabView: View {
         settings.markPairingDateIfNeeded()
     }
 
-    private func presentOldSharedCalendarsPromptIfNeeded() {
-        let ownerSignature = settings.inactiveSharedOwnerIDs.sorted().joined(separator: "|")
-        guard !ownerSignature.isEmpty else { return }
-        guard OldSharedCalendarsCleanupPromptPlan.shouldPresent(
-            pairingStatus: pairingStatus,
-            inactiveSharedOwnerIDs: settings.inactiveSharedOwnerIDs,
-            hasPresentedPrompt: promptedOldSharedOwnerSignature == ownerSignature
-        ) else { return }
-
-        promptedOldSharedOwnerSignature = ownerSignature
-        showOldSharedCalendarsCleanupPrompt = true
-    }
-
     @discardableResult
     private func sendAccessRequest(startDate: Date, endDate: Date) -> Bool {
         errorMessage = nil
@@ -4199,7 +4281,7 @@ struct SettingsTabView: View {
             requestedEndDate: exclusiveEndDate,
             pairingDate: settings.pairingDate ?? PairingDatePlan.normalizedPairingDate(.now),
             accessRequests: accessRequests,
-            currentMemberID: settings.currentLocalOwnerID,
+            currentMemberID: settings.currentMemberID,
             ownerMemberID: ownerMemberIDForPartnerHistory,
             calendar: calendar
         )
@@ -4221,7 +4303,7 @@ struct SettingsTabView: View {
         }
 
         let request = CalendarAccessRequest(
-            requesterMemberID: settings.currentLocalOwnerID,
+            requesterMemberID: settings.currentMemberID,
             ownerMemberID: ownerMemberIDForPartnerHistory,
             requestedStartDate: normalizedStartDate,
             requestedEndDate: exclusiveEndDate,
@@ -4259,7 +4341,7 @@ struct SettingsTabView: View {
             do {
                 try await cloudKit.saveCalendarAccessRequestForSync(
                     request,
-                    currentMemberID: settings.currentLocalOwnerID
+                    currentMemberID: settings.currentMemberID
                 )
             } catch {
                 errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
@@ -4275,7 +4357,7 @@ struct SettingsTabView: View {
     }
 
     private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
-        if requesterMemberID == settings.currentLocalOwnerID {
+        if requesterMemberID == settings.currentMemberID {
             return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
         }
         return settings.partnerStatusDisplayName
@@ -4310,26 +4392,20 @@ struct SettingsTabView: View {
         defer { timeoutTask.cancel() }
 
         do {
-            let pairingID = settings.ensurePairingID()
-            let share = try await cloudKit.prepareShare(
-                ownerMemberID: settings.currentLocalOwnerID,
-                pairingID: pairingID
-            )
+            if !settings.hasSyncedMemberID {
+                settings.currentMemberID = try await cloudKit.fetchCurrentUserRecordID()
+            }
+            let share = try await cloudKit.prepareShare(ownerMemberID: settings.currentMemberID)
             try await cloudKit.saveMemberProfileForSync(
-                ownerMemberID: settings.currentLocalOwnerID,
-                pairingID: pairingID,
+                ownerMemberID: settings.currentMemberID,
                 displayName: displayName
             )
             guard activeSharePreparationID == preparationID else { return }
             settings.iCloudSharingEnabled = true
             settings.hasStartedPairing = true
             settings.markPairingDateIfNeeded()
-            settings.outgoingShareParticipantIDs = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentifiers(
+            settings.outgoingShareParticipantIDs = CloudKitShareParticipantIdentityPlan.acceptedParticipantIDs(
                 from: share.share
-            )
-            settings.partnerICloudEmailAddresses = ICloudSharingIdentityDisplayPlan.emailAddresses(
-                merging: settings.partnerICloudEmailAddresses,
-                CloudKitShareParticipantIdentityPlan.sharedParticipantEmailAddresses(from: share.share)
             )
             preparedShare = share
         } catch {
@@ -4343,8 +4419,7 @@ struct SettingsTabView: View {
     @MainActor
     private func clearLocalPairingAfterSharingStopped() {
         let localOwnerIDsToPurge = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
-            partnerShareOwnerID: settings.partnerShareOwnerID,
-            legacyPartnerMemberID: settings.partnerNoteName
+            partnerShareOwnerID: settings.partnerShareOwnerID
         )
         var purgeError: Error?
         do {
@@ -4365,10 +4440,8 @@ struct SettingsTabView: View {
         settings.hasPromptedPartnerNoteForCurrentPairing = false
         settings.hasShownPairingSafetyNoticeForCurrentPairing = false
         settings.partnerSyncedDisplayName = nil
-        settings.partnerICloudEmailAddresses = []
         settings.outgoingShareParticipantIDs = []
-        settings.clearPairingID()
-        settings.inactiveSharedOwnerIDs = []
+        settings.pairingConflict = nil
         settings.clearPairingDate()
 
         if let purgeError {
@@ -4391,40 +4464,8 @@ struct SettingsTabView: View {
         defer { isStoppingShare = false }
 
         do {
-            try await cloudKit.stopSharing(ownerMemberID: settings.currentLocalOwnerID)
+            try await cloudKit.stopSharing(ownerMemberID: settings.currentMemberID)
             clearLocalPairingAfterSharingStopped()
-        } catch {
-            errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
-        }
-    }
-
-    @MainActor
-    private func deleteAcceptedSharedZones(ownerIDs requestedOwnerIDs: [String]) async {
-        guard !isDeletingAcceptedSharedZones else { return }
-        errorMessage = nil
-        oldSharedCalendarsMessage = nil
-        guard let cloudKit = services.cloudKitIfAvailable else {
-            errorMessage = settings.strings.iCloudSharingUnavailableLocalBuild
-            return
-        }
-
-        let ownerIDs = Array(Set(requestedOwnerIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
-        guard !ownerIDs.isEmpty else { return }
-
-        isDeletingAcceptedSharedZones = true
-        defer { isDeletingAcceptedSharedZones = false }
-
-        do {
-            try await cloudKit.deleteAcceptedSharedZones(ownerIDs: ownerIDs)
-            try ShareCalLocalDataCleanupService.purgeSharedOwnerData(
-                ownerMemberIDs: Set(ownerIDs),
-                modelContext: modelContext
-            )
-            let removedOwnerIDs = Set(ownerIDs)
-            settings.inactiveSharedOwnerIDs = settings.inactiveSharedOwnerIDs.filter { !removedOwnerIDs.contains($0) }
-            acceptedSharedOwnerIDsPendingDeletion = []
-            oldSharedCalendarsMessage = settings.strings.cleanupOldSharedCalendarsSucceeded
-            syncNow()
         } catch {
             errorMessage = CloudKitSharingFailureMessage.userFacingMessage(for: error)
         }
@@ -4443,7 +4484,7 @@ struct SettingsTabView: View {
         defer { isDeletingICloudData = false }
 
         do {
-            try await cloudKit.deleteICloudData(ownerMemberID: settings.currentLocalOwnerID)
+            try await cloudKit.deleteICloudData(ownerMemberID: settings.currentMemberID)
             try ShareCalLocalDataCleanupService.purge(modelContext: modelContext)
             cloudKitDiagnosticMessage = nil
             settings.iCloudSharingEnabled = false
@@ -4453,10 +4494,8 @@ struct SettingsTabView: View {
             settings.hasPromptedPartnerNoteForCurrentPairing = false
             settings.hasShownPairingSafetyNoticeForCurrentPairing = false
             settings.partnerSyncedDisplayName = nil
-            settings.partnerICloudEmailAddresses = []
             settings.outgoingShareParticipantIDs = []
-            settings.clearPairingID()
-            settings.inactiveSharedOwnerIDs = []
+            settings.pairingConflict = nil
             settings.clearPairingDate()
             settings.lastSyncAt = nil
             settings.lastSyncError = nil
@@ -4487,10 +4526,8 @@ struct SettingsTabView: View {
 
     private func localPairingDiagnosticText(cloudKitDiagnostic: CloudKitAccountDiagnostic) -> String {
         [
-            "Pairing ID: \(diagnosticShortCode(settings.pairingID))",
-            "Local Owner ID: \(diagnosticShortCode(settings.currentLocalOwnerID))",
+            "Member ID: \(diagnosticShortCode(settings.currentMemberID))",
             "Partner Owner ID: \(diagnosticShortCode(settings.partnerShareOwnerID))",
-            "Inactive Shared Zones: \(settings.inactiveSharedOwnerIDs.count)",
             "",
             cloudKitDiagnostic.displayText
         ].joined(separator: "\n")

@@ -996,50 +996,17 @@ final class CalendarSetupGuidancePlanTests: XCTestCase {
     }
 }
 
-final class ICloudSharingIdentityDisplayPlanTests: XCTestCase {
-    func testDisplaysUniqueEmailAddressesForReadableICloudIdentity() {
-        let value = ICloudSharingIdentityDisplayPlan.displayValue(
-            for: [" partner@example.com ", "partner@example.com", "other@icloud.com"],
-            emptyValue: "Not connected"
-        )
-
-        XCTAssertEqual(value, "partner@example.com, other@icloud.com")
-    }
-
-    func testHidesInternalOwnerNamesFromReadableICloudIdentity() {
-        let value = ICloudSharingIdentityDisplayPlan.displayValue(
-            for: [" _ee39c883ba88010c4ea25fd9a273af8d ", "+8613069043940", "not-an-email"],
-            emptyValue: "Not connected"
-        )
-
-        XCTAssertEqual(value, "Not connected")
-    }
-
-    func testDisplaysEmptyValueWhenStableSharingIdentifierIsMissing() {
-        let value = ICloudSharingIdentityDisplayPlan.displayValue(
-            for: [nil, " ", ""].compactMap { $0 },
-            emptyValue: "Not connected"
-        )
-
-        XCTAssertEqual(value, "Not connected")
-    }
-}
-
 final class ICloudSharingTeardownPlanTests: XCTestCase {
-    func testPurgesStableOwnerAndLegacyPartnerNicknameIDs() {
+    func testPurgesPartnerOwnerAndPlaceholderIDs() {
         let ownerIDs = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
-            partnerShareOwnerID: "icloud-owner",
-            legacyPartnerMemberID: " yoki "
+            partnerShareOwnerID: "_partnerOwner"
         )
 
-        XCTAssertEqual(ownerIDs, ["icloud-owner", "partner", "yoki"])
+        XCTAssertEqual(ownerIDs, ["_partnerOwner", "partner"])
     }
 
-    func testDoesNotUseEmptyLegacyPartnerNicknameAsOwnerID() {
-        let ownerIDs = ICloudSharingTeardownPlan.localOwnerIDsToPurge(
-            partnerShareOwnerID: nil,
-            legacyPartnerMemberID: " "
-        )
+    func testIgnoresMissingPartnerOwnerID() {
+        let ownerIDs = ICloudSharingTeardownPlan.localOwnerIDsToPurge(partnerShareOwnerID: " ")
 
         XCTAssertEqual(ownerIDs, ["partner"])
     }
@@ -1118,33 +1085,11 @@ final class PairingSettingsPlanTests: XCTestCase {
         XCTAssertEqual(PairingSettingsPlan.incomingStatus(incomingOwnerID: "icloud-owner"), .on)
     }
 
-    func testPartnerIdentityShowsReadableEmailAndHidesInternalOwnerName() {
-        XCTAssertEqual(
-            PairingSettingsPlan.partnerIdentity(
-                incomingOwnerID: " icloud-owner ",
-                outgoingParticipantIDs: ["partner@example.com"],
-                partnerICloudEmailAddresses: [" partner@icloud.com "],
-                emptyValue: "Not connected"
-            ),
-            "partner@icloud.com"
-        )
-        XCTAssertEqual(
-            PairingSettingsPlan.partnerIdentity(
-                incomingOwnerID: " _ee39c883ba88010c4ea25fd9a273af8d ",
-                outgoingParticipantIDs: [" _participantRecordName "],
-                partnerICloudEmailAddresses: [],
-                emptyValue: "Not connected"
-            ),
-            "Not connected"
-        )
-    }
-
-    func testPartnerDisplayNamePrefersLocalNoteThenSyncedProfileThenReadableICloudIdentity() {
+    func testPartnerDisplayNamePrefersLocalNoteThenSyncedProfile() {
         XCTAssertEqual(
             PairingSettingsPlan.partnerDisplayName(
                 partnerNoteName: " Local note ",
                 partnerSyncedDisplayName: "Remote name",
-                partnerICloudIdentity: "partner@icloud.com",
                 fallback: "Partner"
             ),
             "Local note"
@@ -1153,7 +1098,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerDisplayName(
                 partnerNoteName: " ",
                 partnerSyncedDisplayName: " Remote name ",
-                partnerICloudIdentity: "partner@icloud.com",
                 fallback: "Partner"
             ),
             "Remote name"
@@ -1162,16 +1106,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerDisplayName(
                 partnerNoteName: "",
                 partnerSyncedDisplayName: nil,
-                partnerICloudIdentity: "partner@icloud.com",
-                fallback: "Partner"
-            ),
-            "partner@icloud.com"
-        )
-        XCTAssertEqual(
-            PairingSettingsPlan.partnerDisplayName(
-                partnerNoteName: nil,
-                partnerSyncedDisplayName: " ",
-                partnerICloudIdentity: "Not connected",
                 fallback: "Partner"
             ),
             "Partner"
@@ -1183,7 +1117,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerStatusDisplayName(
                 partnerNoteName: " Home ",
                 partnerSyncedDisplayName: " Yoki ",
-                partnerICloudIdentity: "partner@icloud.com",
                 fallback: "Partner",
                 language: .english
             ),
@@ -1193,7 +1126,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerStatusDisplayName(
                 partnerNoteName: " ",
                 partnerSyncedDisplayName: " Yoki ",
-                partnerICloudIdentity: "partner@icloud.com",
                 fallback: "Partner",
                 language: .chinese
             ),
@@ -1203,7 +1135,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerStatusDisplayName(
                 partnerNoteName: " Yoki ",
                 partnerSyncedDisplayName: "Yoki",
-                partnerICloudIdentity: "partner@icloud.com",
                 fallback: "Partner",
                 language: .chinese
             ),
@@ -1213,7 +1144,6 @@ final class PairingSettingsPlanTests: XCTestCase {
             PairingSettingsPlan.partnerStatusDisplayName(
                 partnerNoteName: " 宝宝 ",
                 partnerSyncedDisplayName: nil,
-                partnerICloudIdentity: "Not connected",
                 fallback: "对方",
                 language: .chinese
             ),
@@ -1234,238 +1164,218 @@ final class PairingSettingsPlanTests: XCTestCase {
     }
 }
 
-final class PairingSharedZoneSelectionPlanTests: XCTestCase {
-    func testSelectsOnlyZonesMatchingCurrentPairingID() {
-        let active = sharedZone(ownerName: "_manuOwner", pairingID: "pair-current")
-        let stale = sharedZone(ownerName: "_oldOwner", pairingID: "pair-old")
-        let legacy = sharedZone(ownerName: "_legacyOwner", pairingID: nil)
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-current",
-            sharedZones: [stale, active, legacy]
+final class TwoPersonPairingPlanTests: XCTestCase {
+    func testMutualShareEstablishesPartnerAndLeavesStaleZones() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["_partner"],
+            sharedZoneOwnerIDs: ["_partner", "_oldFriend"]
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-current")
-        XCTAssertEqual(selection.activePartnerOwnerID, "_manuOwner")
-        XCTAssertEqual(selection.activeSharedZoneIDs, [active.zoneID])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_legacyOwner", "_oldOwner"])
+        XCTAssertEqual(resolution.partnerID, "_partner")
+        XCTAssertEqual(resolution.sharedZoneOwnerIDsToLeave, ["_oldFriend"])
+        XCTAssertNil(resolution.conflict)
     }
 
-    func testResolvesUniqueRemotePairingIDConflictToCanonicalPairingID() {
-        let remote = sharedZone(ownerName: "_manuOwner", pairingID: "pair-a")
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-b",
-            sharedZones: [remote],
-            allowsPairingIDConflictResolution: true
+    func testSingleIncomingShareBecomesPartnerWithoutOutgoingShare() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: [],
+            sharedZoneOwnerIDs: ["_partner"]
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-a")
-        XCTAssertEqual(selection.activePartnerOwnerID, "_manuOwner")
-        XCTAssertEqual(selection.activeSharedZoneIDs, [remote.zoneID])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, [])
+        XCTAssertEqual(resolution.partnerID, "_partner")
+        XCTAssertTrue(resolution.sharedZoneOwnerIDsToLeave.isEmpty)
+        XCTAssertNil(resolution.conflict)
     }
 
-    func testKeepsLocalPairingIDWhenConflictResolutionIsDisabled() {
-        let remote = sharedZone(ownerName: "_oldOwner", pairingID: "pair-a")
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-b",
-            sharedZones: [remote],
-            allowsPairingIDConflictResolution: false
+    func testStoredPartnerSelectsAmongMultipleIncomingShares() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: "_partner",
+            outgoingAcceptedParticipantIDs: [],
+            sharedZoneOwnerIDs: ["_oldFriend", "_partner"]
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-b")
-        XCTAssertNil(selection.activePartnerOwnerID)
-        XCTAssertEqual(selection.activeSharedZoneIDs, [])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_oldOwner"])
+        XCTAssertEqual(resolution.partnerID, "_partner")
+        XCTAssertEqual(resolution.sharedZoneOwnerIDsToLeave, ["_oldFriend"])
+        XCTAssertNil(resolution.conflict)
     }
 
-    func testAdoptsOnlyUnambiguousPairingIDWhenLocalPairingIDIsMissing() {
-        let active = sharedZone(ownerName: "_manuOwner", pairingID: "pair-current")
-        let legacy = sharedZone(ownerName: "_legacyOwner", pairingID: nil)
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: nil,
-            sharedZones: [legacy, active]
+    func testMultipleIncomingSharesWithoutBindingIsAConflict() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: [],
+            sharedZoneOwnerIDs: ["_personB", "_personA"]
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-current")
-        XCTAssertEqual(selection.activePartnerOwnerID, "_manuOwner")
-        XCTAssertEqual(selection.activeSharedZoneIDs, [active.zoneID])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_legacyOwner"])
+        XCTAssertNil(resolution.partnerID)
+        XCTAssertTrue(resolution.sharedZoneOwnerIDsToLeave.isEmpty)
+        XCTAssertEqual(
+            resolution.conflict,
+            .multipleIncomingShares(ownerIDs: ["_personA", "_personB"])
+        )
     }
 
-    func testDoesNotAutoSelectWhenMultiplePairingIDsExistAndLocalPairingIDIsMissing() {
-        let first = sharedZone(ownerName: "_firstOwner", pairingID: "pair-1")
-        let second = sharedZone(ownerName: "_secondOwner", pairingID: "pair-2")
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: nil,
-            sharedZones: [first, second]
+    func testOutgoingIncomingMismatchIsAConflictAndBlocksCleanup() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["_personA"],
+            sharedZoneOwnerIDs: ["_personB"]
         )
 
-        XCTAssertNil(selection.pairingID)
-        XCTAssertNil(selection.activePartnerOwnerID)
-        XCTAssertEqual(selection.activeSharedZoneIDs, [])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_firstOwner", "_secondOwner"])
+        XCTAssertNil(resolution.partnerID)
+        XCTAssertTrue(resolution.sharedZoneOwnerIDsToLeave.isEmpty)
+        XCTAssertEqual(
+            resolution.conflict,
+            .outgoingIncomingMismatch(outgoingIDs: ["_personA"], incomingOwnerIDs: ["_personB"])
+        )
     }
 
-    func testIgnoresLegacySharedZonesWithoutPairingID() {
-        let legacy = sharedZone(ownerName: "_legacyOwner", pairingID: nil)
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: nil,
-            sharedZones: [legacy]
+    func testMismatchConflictCarriesAllOutgoingParticipantsAsCandidates() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["_personB", "_personA"],
+            sharedZoneOwnerIDs: ["_personC"]
         )
 
-        XCTAssertNil(selection.pairingID)
-        XCTAssertNil(selection.activePartnerOwnerID)
-        XCTAssertEqual(selection.activeSharedZoneIDs, [])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_legacyOwner"])
+        XCTAssertEqual(
+            resolution.conflict,
+            .outgoingIncomingMismatch(outgoingIDs: ["_personA", "_personB"], incomingOwnerIDs: ["_personC"])
+        )
+        XCTAssertEqual(
+            TwoPersonPairingConflictPresentationPlan.candidateIDs(
+                .outgoingIncomingMismatch(outgoingIDs: ["_personA", "_personB"], incomingOwnerIDs: ["_personC"])
+            ),
+            ["_personA", "_personB", "_personC"]
+        )
     }
 
-    func testSelectsExplicitLegacyPartnerZoneDuringPairingIDMigration() {
-        let activeLegacyPartner = sharedZone(ownerName: "_manuOwner", pairingID: nil)
-        let staleLegacy = sharedZone(ownerName: "_oldOwner", pairingID: nil)
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-current",
-            sharedZones: [staleLegacy, activeLegacyPartner],
-            allowsPairingIDConflictResolution: false,
-            legacyPartnerOwnerIDs: ["_manuOwner"]
+    func testOutgoingOnlyShareWaitsForPartnerWithoutConflict() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["_partner"],
+            sharedZoneOwnerIDs: []
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-current")
-        XCTAssertEqual(selection.activePartnerOwnerID, "_manuOwner")
-        XCTAssertEqual(selection.activeSharedZoneIDs, [activeLegacyPartner.zoneID])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_oldOwner"])
+        XCTAssertNil(resolution.partnerID)
+        XCTAssertTrue(resolution.sharedZoneOwnerIDsToLeave.isEmpty)
+        XCTAssertNil(resolution.conflict)
     }
 
-    func testDoesNotSelectUnlistedLegacyZoneDuringPairingIDMigration() {
-        let staleLegacy = sharedZone(ownerName: "_oldOwner", pairingID: nil)
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-current",
-            sharedZones: [staleLegacy],
-            allowsPairingIDConflictResolution: false,
-            legacyPartnerOwnerIDs: ["_manuOwner"]
+    func testMultipleOutgoingParticipantsWithoutBindingIsAConflict() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["_personB", "_personA"],
+            sharedZoneOwnerIDs: []
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-current")
-        XCTAssertNil(selection.activePartnerOwnerID)
-        XCTAssertEqual(selection.activeSharedZoneIDs, [])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_oldOwner"])
+        XCTAssertEqual(
+            resolution.conflict,
+            .multipleOutgoingParticipants(participantIDs: ["_personA", "_personB"])
+        )
     }
 
-    func testResolvesTrustedPartnerPairingIDConflictWhenGlobalResolutionIsDisabled() {
-        let trustedPartner = sharedZone(ownerName: "_manuOwner", pairingID: "pair-a")
-        let stale = sharedZone(ownerName: "_oldOwner", pairingID: "pair-old")
-
-        let selection = PairingSharedZoneSelectionPlan.selection(
-            currentPairingID: "pair-b",
-            sharedZones: [stale, trustedPartner],
-            allowsPairingIDConflictResolution: false,
-            legacyPartnerOwnerIDs: ["_manuOwner"]
+    func testMultipleOutgoingParticipantsWithStoredPartnerIsNotAConflict() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: "_partner",
+            outgoingAcceptedParticipantIDs: ["_partner", "_intruder"],
+            sharedZoneOwnerIDs: []
         )
 
-        XCTAssertEqual(selection.pairingID, "pair-a")
-        XCTAssertEqual(selection.activePartnerOwnerID, "_manuOwner")
-        XCTAssertEqual(selection.activeSharedZoneIDs, [trustedPartner.zoneID])
-        XCTAssertEqual(selection.inactiveSharedOwnerIDs, ["_oldOwner"])
+        XCTAssertNil(resolution.partnerID)
+        XCTAssertNil(resolution.conflict)
     }
 
-    private func sharedZone(ownerName: String, pairingID: String?) -> CloudKitSharedZonePairingInfo {
-        CloudKitSharedZonePairingInfo(
-            zoneID: CKRecordZone.ID(zoneName: "CoupleSpace", ownerName: ownerName),
-            pairingID: pairingID
+    func testNonCloudKitParticipantIdentifiersAreIgnoredForMatching() {
+        let resolution = TwoPersonPairingPlan.resolve(
+            storedPartnerID: nil,
+            outgoingAcceptedParticipantIDs: ["partner@example.com"],
+            sharedZoneOwnerIDs: ["_partner"]
+        )
+
+        XCTAssertEqual(resolution.partnerID, "_partner")
+        XCTAssertNil(resolution.conflict)
+    }
+}
+
+final class ShareAcceptanceGuardPlanTests: XCTestCase {
+    func testFirstAcceptanceNeedsNoConfirmation() {
+        XCTAssertFalse(
+            ShareAcceptanceGuardPlan.requiresReplacementConfirmation(
+                incomingOwnerID: "_partner",
+                storedPartnerID: nil,
+                outgoingParticipantIDs: []
+            )
+        )
+    }
+
+    func testReacceptingCurrentPartnerNeedsNoConfirmation() {
+        XCTAssertFalse(
+            ShareAcceptanceGuardPlan.requiresReplacementConfirmation(
+                incomingOwnerID: "_partner",
+                storedPartnerID: "_partner",
+                outgoingParticipantIDs: []
+            )
+        )
+    }
+
+    func testAcceptingDifferentPersonThanStoredPartnerNeedsConfirmation() {
+        XCTAssertTrue(
+            ShareAcceptanceGuardPlan.requiresReplacementConfirmation(
+                incomingOwnerID: "_intruder",
+                storedPartnerID: "_partner",
+                outgoingParticipantIDs: []
+            )
+        )
+    }
+
+    func testAcceptingDifferentPersonThanOutgoingParticipantNeedsConfirmation() {
+        XCTAssertTrue(
+            ShareAcceptanceGuardPlan.requiresReplacementConfirmation(
+                incomingOwnerID: "_intruder",
+                storedPartnerID: nil,
+                outgoingParticipantIDs: ["_partner"]
+            )
+        )
+    }
+
+    func testNonCloudKitOutgoingIdentifiersDoNotBlockAcceptance() {
+        XCTAssertFalse(
+            ShareAcceptanceGuardPlan.requiresReplacementConfirmation(
+                incomingOwnerID: "_partner",
+                storedPartnerID: nil,
+                outgoingParticipantIDs: ["partner@example.com"]
+            )
         )
     }
 }
 
-final class LegacyPairingIDMigrationPlanTests: XCTestCase {
-    func testGeneratesPairingIDForLegacyBidirectionalPairing() {
-        XCTAssertTrue(
-            LegacyPairingIDMigrationPlan.shouldGeneratePairingID(
-                currentPairingID: nil,
-                hasStartedPairing: true,
-                partnerShareOwnerID: nil,
-                outgoingParticipantIDs: [" _partnerOwner "],
-                sharedZoneOwnerIDs: ["_partnerOwner"]
-            )
-        )
-    }
-
-    func testDoesNotGeneratePairingIDForUnrelatedOldAcceptedShare() {
-        XCTAssertFalse(
-            LegacyPairingIDMigrationPlan.shouldGeneratePairingID(
-                currentPairingID: nil,
-                hasStartedPairing: true,
-                partnerShareOwnerID: nil,
-                outgoingParticipantIDs: ["_activeOwner"],
-                sharedZoneOwnerIDs: ["_oldOwner"]
-            )
-        )
-    }
-
-    func testUsesExistingPartnerShareOwnerForLegacySelection() {
+final class TwoPersonShareLockPlanTests: XCTestCase {
+    func testRemovesExtraParticipantsOnlyWhenPartnerIsAmongThem() {
         XCTAssertEqual(
-            LegacyPairingIDMigrationPlan.partnerOwnerIDsForSelection(
-                partnerShareOwnerID: " _partnerOwner ",
-                outgoingParticipantIDs: ["_oldOwner"],
-                hasStartedPairing: true
+            TwoPersonShareLockPlan.participantIDsToRemove(
+                acceptedParticipantIDs: ["_partner", "_intruder"],
+                partnerID: "_partner"
             ),
-            ["_partnerOwner"]
+            ["_intruder"]
         )
-    }
-
-    func testRequiresSingleOutgoingParticipantWhenNoIncomingOwnerIsKnown() {
         XCTAssertEqual(
-            LegacyPairingIDMigrationPlan.partnerOwnerIDsForSelection(
-                partnerShareOwnerID: nil,
-                outgoingParticipantIDs: ["_firstOwner", "_secondOwner"],
-                hasStartedPairing: true
+            TwoPersonShareLockPlan.participantIDsToRemove(
+                acceptedParticipantIDs: ["_personA", "_personB"],
+                partnerID: nil
+            ),
+            []
+        )
+        XCTAssertEqual(
+            TwoPersonShareLockPlan.participantIDsToRemove(
+                acceptedParticipantIDs: ["_personA", "_personB"],
+                partnerID: "_partner"
             ),
             []
         )
     }
 }
 
-final class OldSharedCalendarsCleanupPromptPlanTests: XCTestCase {
-    func testPromptsAfterPairingWhenInactiveSharedZonesExist() {
-        XCTAssertTrue(
-            OldSharedCalendarsCleanupPromptPlan.shouldPresent(
-                pairingStatus: .paired,
-                inactiveSharedOwnerIDs: ["_oldOwner"],
-                hasPresentedPrompt: false
-            )
-        )
-    }
-
-    func testDoesNotPromptWhenNotPairedOrAlreadyPresentedOrNoInactiveSharedZones() {
-        XCTAssertFalse(
-            OldSharedCalendarsCleanupPromptPlan.shouldPresent(
-                pairingStatus: .waitingForPartner,
-                inactiveSharedOwnerIDs: ["_oldOwner"],
-                hasPresentedPrompt: false
-            )
-        )
-        XCTAssertFalse(
-            OldSharedCalendarsCleanupPromptPlan.shouldPresent(
-                pairingStatus: .paired,
-                inactiveSharedOwnerIDs: [],
-                hasPresentedPrompt: false
-            )
-        )
-        XCTAssertFalse(
-            OldSharedCalendarsCleanupPromptPlan.shouldPresent(
-                pairingStatus: .paired,
-                inactiveSharedOwnerIDs: ["_oldOwner"],
-                hasPresentedPrompt: true
-            )
-        )
-    }
-}
 
 final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
     func testPromptsWhenFreshLocalStateFindsExistingCloudDataAfterProfileSetup() {
@@ -1481,8 +1391,6 @@ final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
                 hasStartedPairing: false,
                 partnerShareOwnerID: nil,
                 outgoingShareParticipantIDs: [],
-                pairingID: nil,
-                inactiveSharedOwnerIDs: [],
                 lastSyncAt: nil
             )
         )
@@ -1501,8 +1409,6 @@ final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
                 hasStartedPairing: false,
                 partnerShareOwnerID: nil,
                 outgoingShareParticipantIDs: [],
-                pairingID: nil,
-                inactiveSharedOwnerIDs: [],
                 lastSyncAt: nil
             )
         )
@@ -1521,8 +1427,6 @@ final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
                 hasStartedPairing: true,
                 partnerShareOwnerID: nil,
                 outgoingShareParticipantIDs: [],
-                pairingID: "pair-1",
-                inactiveSharedOwnerIDs: [],
                 lastSyncAt: nil
             )
         )
@@ -1535,8 +1439,6 @@ final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
                 hasStartedPairing: false,
                 partnerShareOwnerID: nil,
                 outgoingShareParticipantIDs: [],
-                pairingID: nil,
-                inactiveSharedOwnerIDs: [],
                 lastSyncAt: nil
             )
         )
@@ -1546,8 +1448,6 @@ final class ExistingICloudDataRecoveryPlanTests: XCTestCase {
                 hasStartedPairing: false,
                 partnerShareOwnerID: nil,
                 outgoingShareParticipantIDs: [],
-                pairingID: nil,
-                inactiveSharedOwnerIDs: [],
                 lastSyncAt: nil
             )
         )
@@ -1685,22 +1585,69 @@ final class AppLanguageSettingsTests: XCTestCase {
 }
 
 final class SettingsStoreIdentityMigrationTests: XCTestCase {
-    func testCreatesStableLocalOwnerIDAndPersistsItAcrossLaunches() throws {
+    func testStartsWithPlaceholderMemberIDAndPersistsFetchedCloudKitID() throws {
         let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let firstLaunchSettings = SettingsStore(defaults: defaults)
-        let generatedOwnerID = firstLaunchSettings.currentLocalOwnerID
 
-        XCTAssertTrue(generatedOwnerID.hasPrefix("local-owner-"))
-        XCTAssertEqual(firstLaunchSettings.currentDisplayName, "")
+        XCTAssertEqual(firstLaunchSettings.currentMemberID, SettingsStore.unsyncedMemberID)
+        XCTAssertFalse(firstLaunchSettings.hasSyncedMemberID)
 
-        firstLaunchSettings.currentDisplayName = "New nickname"
+        firstLaunchSettings.currentMemberID = "_cloudKitUser"
         let secondLaunchSettings = SettingsStore(defaults: defaults)
 
-        XCTAssertEqual(secondLaunchSettings.currentLocalOwnerID, generatedOwnerID)
-        XCTAssertEqual(secondLaunchSettings.currentDisplayName, "New nickname")
+        XCTAssertEqual(secondLaunchSettings.currentMemberID, "_cloudKitUser")
+        XCTAssertTrue(secondLaunchSettings.hasSyncedMemberID)
+    }
+
+    func testWipesLegacyLocalOwnerPairingStateAndRequestsLocalDataPurge() throws {
+        let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("local-owner-legacy", forKey: "currentLocalOwnerID")
+        defaults.set("pair-legacy", forKey: "pairingID")
+        defaults.set("_oldPartner", forKey: "partnerShareOwnerID")
+        defaults.set(["a@example.com"], forKey: "outgoingShareParticipantIDs")
+        defaults.set(true, forKey: "hasStartedPairing")
+        defaults.set("Display", forKey: "currentDisplayName")
+        defaults.set(["calendar-1"], forKey: "selectedCalendarIDs")
+
+        let settings = SettingsStore(defaults: defaults)
+
+        XCTAssertNil(defaults.string(forKey: "currentLocalOwnerID"))
+        XCTAssertNil(defaults.string(forKey: "pairingID"))
+        XCTAssertNil(settings.partnerShareOwnerID)
+        XCTAssertTrue(settings.outgoingShareParticipantIDs.isEmpty)
+        XCTAssertFalse(settings.hasStartedPairing)
+        XCTAssertEqual(settings.currentMemberID, SettingsStore.unsyncedMemberID)
+        XCTAssertEqual(settings.currentDisplayName, "Display")
+        XCTAssertEqual(settings.selectedCalendarIDs, ["calendar-1"])
+        XCTAssertTrue(settings.consumeLegacyLocalDataPurgeFlag())
+        XCTAssertFalse(settings.consumeLegacyLocalDataPurgeFlag())
+    }
+
+    func testPairingConflictPersistsAcrossLaunches() throws {
+        let suiteName = "SettingsStoreIdentityMigrationTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.pairingConflict = .outgoingIncomingMismatch(
+            outgoingIDs: ["_personA"],
+            incomingOwnerIDs: ["_personB"]
+        )
+
+        let relaunchedSettings = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(
+            relaunchedSettings.pairingConflict,
+            .outgoingIncomingMismatch(outgoingIDs: ["_personA"], incomingOwnerIDs: ["_personB"])
+        )
+
+        relaunchedSettings.pairingConflict = nil
+        XCTAssertNil(SettingsStore(defaults: defaults).pairingConflict)
     }
 
     func testPartnerSyncedDisplayNameIsPersistedSeparatelyFromPartnerNoteName() throws {
@@ -1781,18 +1728,14 @@ final class ShareCalStringsTests: XCTestCase {
         )
         XCTAssertEqual(strings.pairingPartnerLabel, "Pairing Partner")
         XCTAssertEqual(strings.partnerNicknameLabel, "Nickname")
-        XCTAssertEqual(strings.partnerICloudIdentityLabel, "iCloud Identity")
         XCTAssertEqual(strings.sharingMyCalendarLabel, "Sharing My Calendar")
         XCTAssertEqual(strings.partnersCalendarLabel, "Partner's Calendar")
         XCTAssertEqual(strings.startPairingButton(isPreparing: false), "Start Pairing")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "Full details")
-        XCTAssertEqual(strings.noICloudSharingIdentity, "Not connected")
         XCTAssertEqual(strings.unpairButton, "Unpair")
-        XCTAssertEqual(strings.oldSharedCalendarsCleanupPromptTitle, "Old Shared Calendars Found")
-        XCTAssertEqual(
-            strings.oldSharedCalendarsCleanupPromptMessage,
-            "Your current pairing is active, but this device still has old accepted ShareCal shares. You can remove them now or later from Settings."
-        )
+        XCTAssertEqual(strings.pairingConflictTitle, "Pairing Conflict")
+        XCTAssertEqual(strings.keepPartnerButton("Yoki"), "Keep Yoki")
+        XCTAssertEqual(strings.pairingReplacementTitle, "Replace Current Pairing?")
         XCTAssertEqual(strings.deleteICloudDataButton, "Delete My iCloud Data")
         XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud data deleted.")
     }
@@ -1822,18 +1765,14 @@ final class ShareCalStringsTests: XCTestCase {
         )
         XCTAssertEqual(strings.pairingPartnerLabel, "配对对象")
         XCTAssertEqual(strings.partnerNicknameLabel, "昵称")
-        XCTAssertEqual(strings.partnerICloudIdentityLabel, "iCloud 身份")
         XCTAssertEqual(strings.sharingMyCalendarLabel, "我共享给对方")
         XCTAssertEqual(strings.partnersCalendarLabel, "对方共享给我")
         XCTAssertEqual(strings.startPairingButton(isPreparing: false), "发起配对")
         XCTAssertEqual(strings.defaultVisibilityLabel(for: .fullDetails), "完整详情")
-        XCTAssertEqual(strings.noICloudSharingIdentity, "未连接")
         XCTAssertEqual(strings.unpairButton, "解除配对")
-        XCTAssertEqual(strings.oldSharedCalendarsCleanupPromptTitle, "发现旧共享")
-        XCTAssertEqual(
-            strings.oldSharedCalendarsCleanupPromptMessage,
-            "当前配对已生效，但本设备仍有旧的 ShareCal accepted share。你可以现在移除，也可以稍后在设置中处理。"
-        )
+        XCTAssertEqual(strings.pairingConflictTitle, "配对冲突")
+        XCTAssertEqual(strings.keepPartnerButton("Yoki"), "保留 Yoki")
+        XCTAssertEqual(strings.pairingReplacementTitle, "更换配对对象？")
         XCTAssertEqual(strings.deleteICloudDataButton, "删除我的 iCloud 数据")
         XCTAssertEqual(strings.deleteICloudDataSucceeded, "iCloud 数据已删除。")
     }
@@ -2411,31 +2350,6 @@ final class CloudKitStopSharingPlanTests: XCTestCase {
         XCTAssertEqual(CloudKitStopSharingPlan.shareRecordIDToDelete(from: root), share.recordID)
     }
 
-    func testICloudDataCleanupStopsSharingBeforeDeletingPrivateZone() {
-        XCTAssertEqual(
-            CloudKitICloudDataCleanupPlan.steps,
-            [.stopSharing, .deletePrivateZone]
-        )
-    }
-
-    func testICloudDataCleanupDeletesOnlyCoupleSpacePrivateZone() {
-        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
-
-        XCTAssertEqual(CloudKitICloudDataCleanupPlan.zoneIDsToDelete(zoneID: zoneID), [zoneID])
-    }
-
-    func testICloudDataCleanupIgnoresMissingPrivateZone() {
-        let error = NSError(domain: CKError.errorDomain, code: CKError.Code.unknownItem.rawValue)
-
-        XCTAssertTrue(CloudKitICloudDataCleanupPlan.shouldIgnoreZoneDeletionError(error))
-    }
-
-    func testICloudDataCleanupDoesNotIgnorePermissionErrors() {
-        let error = NSError(domain: CKError.errorDomain, code: CKError.Code.permissionFailure.rawValue)
-
-        XCTAssertFalse(CloudKitICloudDataCleanupPlan.shouldIgnoreZoneDeletionError(error))
-    }
-
     @MainActor
     func testLocalICloudDataCleanupPurgesCachedShareCalModels() throws {
         let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
@@ -2519,61 +2433,6 @@ final class CloudKitStopSharingPlanTests: XCTestCase {
         let remainingComments = try context.fetch(FetchDescriptor<EventComment>()).map(\.body).sorted()
         XCTAssertEqual(remainingMirrors, ["mine", "stranger"])
         XCTAssertEqual(remainingComments, ["keep"])
-    }
-
-    @MainActor
-    func testReviewSampleCleanupPurgesOnlyPreviewData() throws {
-        let container = try ShareCalModelContainer.make(isStoredInMemoryOnly: true)
-        let context = ModelContext(container)
-
-        let legacySampleMirror = cleanupMirror(
-            owner: "me",
-            key: "preview-event",
-            sourceCalendarID: "sharecal-preview"
-        )
-        context.insert(legacySampleMirror)
-        context.insert(EventInvitation(
-            id: "sharecal-preview:invite:10000",
-            creatorMemberID: "me",
-            inviteeMemberID: "partner",
-            title: "Preview invite",
-            startDate: Date(timeIntervalSince1970: 10_000),
-            endDate: Date(timeIntervalSince1970: 11_000),
-            location: nil,
-            notes: nil
-        ))
-        context.insert(EventComment(
-            id: "sharecal-preview:comment:10000",
-            eventMirrorID: legacySampleMirror.id,
-            authorMemberID: "partner",
-            body: "remove",
-            createdAt: Date(timeIntervalSince1970: 12_000)
-        ))
-        context.insert(cleanupMirror(owner: "me", key: "real-event"))
-        context.insert(EventInvitation(
-            id: "real-invite",
-            creatorMemberID: "me",
-            inviteeMemberID: "partner",
-            title: "Real invite",
-            startDate: Date(timeIntervalSince1970: 20_000),
-            endDate: Date(timeIntervalSince1970: 21_000),
-            location: nil,
-            notes: nil
-        ))
-        context.insert(EventComment(
-            id: "real-comment",
-            eventMirrorID: "real-event",
-            authorMemberID: "partner",
-            body: "keep",
-            createdAt: Date(timeIntervalSince1970: 22_000)
-        ))
-        try context.save()
-
-        try ShareCalLocalDataCleanupService.purgeReviewSampleData(modelContext: context)
-
-        XCTAssertEqual(try context.fetch(FetchDescriptor<EventMirror>()).map(\.mirrorKey), ["real-event"])
-        XCTAssertEqual(try context.fetch(FetchDescriptor<EventInvitation>()).map(\.id), ["real-invite"])
-        XCTAssertEqual(try context.fetch(FetchDescriptor<EventComment>()).map(\.id), ["real-comment"])
     }
 
     private func cleanupMirror(
@@ -2722,24 +2581,8 @@ final class CloudKitRootLookupPolicyTests: XCTestCase {
     }
 }
 
-final class CloudKitShareSavePlanTests: XCTestCase {
-    func testSavesNewRootBeforeCreatingShare() {
-        XCTAssertEqual(
-            CloudKitShareSavePlan.steps(rootState: .created),
-            [.saveRootBeforeCreatingShare, .saveShare]
-        )
-    }
-
-    func testExistingRootCanCreateShareDirectly() {
-        XCTAssertEqual(
-            CloudKitShareSavePlan.steps(rootState: .existing),
-            [.saveShare]
-        )
-    }
-}
-
 final class CloudKitSharePermissionPlanTests: XCTestCase {
-    func testConfiguresShareForInviteLinks() {
+    func testConfiguresShareForInviteLinksUntilPartnerJoins() {
         let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
         let root = CKRecord(
             recordType: "CoupleSpace",
@@ -2747,12 +2590,23 @@ final class CloudKitSharePermissionPlanTests: XCTestCase {
         )
         let share = CKShare(rootRecord: root)
 
-        XCTAssertTrue(CloudKitSharePermissionPlan.needsLinkInvitationUpgrade(share))
+        XCTAssertTrue(CloudKitSharePermissionPlan.needsLinkInvitationUpgrade(share, acceptedParticipantCount: 0))
 
         CloudKitSharePermissionPlan.configureForLinkInvitation(share)
 
         XCTAssertEqual(share.publicPermission, .readWrite)
-        XCTAssertFalse(CloudKitSharePermissionPlan.needsLinkInvitationUpgrade(share))
+        XCTAssertFalse(CloudKitSharePermissionPlan.needsLinkInvitationUpgrade(share, acceptedParticipantCount: 0))
+    }
+
+    func testDoesNotReopenLinkInvitationAfterPartnerJoined() {
+        let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
+        let root = CKRecord(
+            recordType: "CoupleSpace",
+            recordID: CKRecord.ID(recordName: CloudKitCoupleSpaceService.rootRecordName, zoneID: zoneID)
+        )
+        let share = CKShare(rootRecord: root)
+
+        XCTAssertFalse(CloudKitSharePermissionPlan.needsLinkInvitationUpgrade(share, acceptedParticipantCount: 1))
     }
 
     func testControllerPermissionsExposePublicInviteLinks() {
@@ -2766,39 +2620,34 @@ final class CloudKitSharePermissionPlanTests: XCTestCase {
 
 final class CloudKitShareParticipantIdentityPlanTests: XCTestCase {
     func testCountsOnlyAcceptedNonOwnerParticipantsAsShared() {
-        let snapshot = CloudKitShareParticipantIdentityPlan.sharedParticipantIdentitySnapshot(from: [
+        let participantIDs = CloudKitShareParticipantIdentityPlan.acceptedParticipantIDs(from: [
             CloudKitShareParticipantIdentity(
                 role: .owner,
                 acceptanceStatus: .accepted,
-                identifier: "owner@example.com",
-                emailAddress: "owner@example.com"
+                identifier: "_owner"
             ),
             CloudKitShareParticipantIdentity(
                 role: .privateUser,
                 acceptanceStatus: .pending,
-                identifier: "pending@example.com",
-                emailAddress: "pending@example.com"
+                identifier: "_pending"
             ),
             CloudKitShareParticipantIdentity(
                 role: .privateUser,
                 acceptanceStatus: .unknown,
-                identifier: "unknown@example.com",
-                emailAddress: "unknown@example.com"
+                identifier: "_unknown"
             ),
             CloudKitShareParticipantIdentity(
                 role: .privateUser,
                 acceptanceStatus: .accepted,
-                identifier: "accepted@example.com",
-                emailAddress: "accepted@example.com"
+                identifier: "_accepted"
             )
         ])
 
-        XCTAssertEqual(snapshot.identifiers, ["accepted@example.com"])
-        XCTAssertEqual(snapshot.emailAddresses, ["accepted@example.com"])
+        XCTAssertEqual(participantIDs, ["_accepted"])
     }
 }
 
-final class CloudKitContainerDiagnosticPlanTests: XCTestCase {
+final class CloudKitAccountDiagnosticTests: XCTestCase {
     func testAccountDiagnosticDisplaySeparatesExpectedAndRuntimeChecks() {
         let diagnostic = CloudKitAccountDiagnostic(
             expectedContainerIdentifier: "iCloud.com.leeberty.CoupleCalendar",
@@ -2828,28 +2677,8 @@ final class CloudKitContainerDiagnosticPlanTests: XCTestCase {
         )
         XCTAssertFalse(diagnostic.displayText.contains("Entitlements"))
     }
-
-    func testDisplaysRuntimeContainerIdentifierWhenCloudKitProvidesOne() {
-        XCTAssertEqual(
-            CloudKitContainerDiagnosticPlan.displayIdentifier(
-                runtimeIdentifier: "iCloud.runtime",
-                fallbackIdentifier: "iCloud.fallback"
-            ),
-            "iCloud.runtime"
-        )
-    }
-
-    func testFallsBackToExpectedContainerIdentifierWhenRuntimeIdentifierIsMissing() {
-        XCTAssertEqual(
-            CloudKitContainerDiagnosticPlan.displayIdentifier(
-                runtimeIdentifier: nil,
-                fallbackIdentifier: "iCloud.fallback"
-            ),
-            "iCloud.fallback"
-        )
-    }
-
 }
+
 
 final class CloudKitSharedReadDiagnosticTests: XCTestCase {
     func testDisplaysReadableSharedRecordCounts() {
@@ -2903,104 +2732,21 @@ final class CloudKitSharedReadDiagnosticTests: XCTestCase {
     }
 }
 
-final class CloudKitShareAcceptancePlanTests: XCTestCase {
-    func testUsesMetadataContainerIdentifierWhenAcceptingShare() {
-        XCTAssertEqual(
-            CloudKitShareAcceptancePlan.containerIdentifier(
-                metadataContainerIdentifier: "iCloud.shared",
-                fallbackIdentifier: "iCloud.fallback"
-            ),
-            "iCloud.shared"
-        )
-    }
-
-    func testFallsBackToAppContainerIdentifierWhenMetadataOmitsContainerIdentifier() {
-        XCTAssertEqual(
-            CloudKitShareAcceptancePlan.containerIdentifier(
-                metadataContainerIdentifier: nil,
-                fallbackIdentifier: "iCloud.fallback"
-            ),
-            "iCloud.fallback"
-        )
-    }
-}
-
-final class CloudKitShareRootICloudEmailPlanTests: XCTestCase {
-    func testShareRootPairingMetadataKeepsStableOwnerIDAndWritesPairingID() {
+final class CloudKitShareRootMetadataPlanTests: XCTestCase {
+    func testWritesStableOwnerMemberIDToShareRoot() {
         let record = CKRecord(recordType: "CoupleSpace")
 
-        CloudKitShareRootPairingPlan.applyMetadata(
-            ownerMemberID: "me",
-            ownerICloudEmailAddress: " owner@icloud.com ",
-            pairingID: "pair-current",
-            to: record
-        )
+        CloudKitShareRootMetadataPlan.applyOwnerMemberID("_me", to: record)
 
-        XCTAssertEqual(record["ownerMemberID"] as? String, "me")
-        XCTAssertEqual(record["pairingID"] as? String, "pair-current")
-        XCTAssertNil(record["ownerICloudEmailAddress"] as? String)
-    }
-
-    func testUsesStableShareRootOwnerMemberIDEvenWhenReadableEmailIsAvailable() {
-        XCTAssertEqual(
-            CloudKitShareRootICloudEmailPlan.ownerMemberIDValue(
-                ownerMemberID: "me",
-                ownerICloudEmailAddress: " owner@icloud.com "
-            ),
-            "me"
-        )
-        XCTAssertEqual(
-            CloudKitShareRootICloudEmailPlan.ownerMemberIDValue(
-                ownerMemberID: "me",
-                ownerICloudEmailAddress: "_ee39c883ba88010c4ea25fd9a273af8d"
-            ),
-            "me"
-        )
-    }
-
-    func testDoesNotWriteOwnerICloudEmailAddressBeforeProductionSchemaSupportsIt() {
-        let record = CKRecord(recordType: "CoupleSpace")
-
-        CloudKitShareRootICloudEmailPlan.applyOwnerICloudEmailAddress(
-            " owner@icloud.com ",
-            to: record
-        )
-
-        XCTAssertNil(record["ownerICloudEmailAddress"] as? String)
-    }
-
-    func testDoesNotClearExistingOwnerICloudEmailAddressWhenWritesAreDisabled() {
-        let record = CKRecord(recordType: "CoupleSpace")
-        record["ownerICloudEmailAddress"] = "old@icloud.com" as CKRecordValue
-
-        CloudKitShareRootICloudEmailPlan.applyOwnerICloudEmailAddress(
-            "_ee39c883ba88010c4ea25fd9a273af8d",
-            to: record
-        )
-
-        XCTAssertEqual(record["ownerICloudEmailAddress"] as? String, "old@icloud.com")
-    }
-
-    func testReadsOnlyEmailAddressesFromSharedRootRecords() {
-        let emailRecord = CKRecord(recordType: "CoupleSpace")
-        emailRecord["ownerICloudEmailAddress"] = " partner@icloud.com " as CKRecordValue
-        let ownerMemberEmailRecord = CKRecord(recordType: "CoupleSpace")
-        ownerMemberEmailRecord["ownerMemberID"] = " owner-member@icloud.com " as CKRecordValue
-        let internalRecord = CKRecord(recordType: "CoupleSpace")
-        internalRecord["ownerICloudEmailAddress"] = "_82828b1d87c3d5e8685ae3b8c5a6c80a" as CKRecordValue
-
-        XCTAssertEqual(
-            CloudKitShareRootICloudEmailPlan.emailAddresses(from: [emailRecord, ownerMemberEmailRecord, internalRecord]),
-            ["partner@icloud.com", "owner-member@icloud.com"]
-        )
+        XCTAssertEqual(record["ownerMemberID"] as? String, "_me")
     }
 }
 
 final class MemberProfileRecordMapperTests: XCTestCase {
-    func testBuildsDeterministicRecordNameFromOwnerAndPairingID() {
+    func testBuildsDeterministicRecordNameFromOwnerID() {
         XCTAssertEqual(
-            MemberProfileRecordMapper.recordName(ownerMemberID: "local-owner-123", pairingID: "pair-abc"),
-            "member-profile:local-owner-123:pair-abc"
+            MemberProfileRecordMapper.recordName(ownerMemberID: "_owner123"),
+            "member-profile:_owner123"
         )
     }
 
@@ -3008,8 +2754,7 @@ final class MemberProfileRecordMapperTests: XCTestCase {
         let zoneID = CKRecordZone.ID(zoneName: "CoupleSpace")
         let updatedAt = Date(timeIntervalSince1970: 1_800)
         let profile = CloudKitMemberProfile(
-            ownerMemberID: "local-owner-123",
-            pairingID: "pair-abc",
+            ownerMemberID: "_owner123",
             displayName: " Manu ",
             updatedAt: updatedAt
         )
@@ -3018,52 +2763,46 @@ final class MemberProfileRecordMapperTests: XCTestCase {
         let decodedProfile = try MemberProfileRecordMapper.memberProfile(from: record)
 
         XCTAssertEqual(record.recordType, "MemberProfile")
-        XCTAssertEqual(record.recordID.recordName, "member-profile:local-owner-123:pair-abc")
-        XCTAssertEqual(record[MemberProfileRecordMapper.Key.ownerMemberID] as? String, "local-owner-123")
-        XCTAssertEqual(record[MemberProfileRecordMapper.Key.pairingID] as? String, "pair-abc")
+        XCTAssertEqual(record.recordID.recordName, "member-profile:_owner123")
+        XCTAssertEqual(record[MemberProfileRecordMapper.Key.ownerMemberID] as? String, "_owner123")
         XCTAssertEqual(record[MemberProfileRecordMapper.Key.displayName] as? String, "Manu")
         XCTAssertEqual(record[MemberProfileRecordMapper.Key.updatedAt] as? Date, updatedAt)
         XCTAssertEqual(decodedProfile, CloudKitMemberProfile(
-            ownerMemberID: "local-owner-123",
-            pairingID: "pair-abc",
+            ownerMemberID: "_owner123",
             displayName: "Manu",
             updatedAt: updatedAt
         ))
     }
 
-    func testSelectsPartnerDisplayNameFromMatchingPairingAndDifferentOwner() {
-        let current = CloudKitMemberProfile(
-            ownerMemberID: "local-owner",
-            pairingID: "pair-current",
+    func testSelectsNewestPartnerDisplayNameByOwnerID() {
+        let mine = CloudKitMemberProfile(
+            ownerMemberID: "_me",
             displayName: "Me",
             updatedAt: Date(timeIntervalSince1970: 1_000)
         )
-        let stale = CloudKitMemberProfile(
-            ownerMemberID: "partner-owner",
-            pairingID: "pair-old",
-            displayName: "Old name",
-            updatedAt: Date(timeIntervalSince1970: 2_000)
-        )
         let olderPartner = CloudKitMemberProfile(
-            ownerMemberID: "partner-owner",
-            pairingID: "pair-current",
+            ownerMemberID: "_partner",
             displayName: "Older name",
             updatedAt: Date(timeIntervalSince1970: 3_000)
         )
         let newerPartner = CloudKitMemberProfile(
-            ownerMemberID: "partner-owner",
-            pairingID: "pair-current",
+            ownerMemberID: "_partner",
             displayName: "Newer name",
             updatedAt: Date(timeIntervalSince1970: 4_000)
         )
 
         XCTAssertEqual(
             MemberProfileDisplayPlan.partnerSyncedDisplayName(
-                from: [stale, newerPartner, current, olderPartner],
-                currentLocalOwnerID: "local-owner",
-                pairingID: "pair-current"
+                from: [newerPartner, mine, olderPartner],
+                partnerID: "_partner"
             ),
             "Newer name"
+        )
+        XCTAssertNil(
+            MemberProfileDisplayPlan.partnerSyncedDisplayName(
+                from: [newerPartner, mine, olderPartner],
+                partnerID: nil
+            )
         )
     }
 }
@@ -3076,7 +2815,11 @@ final class ShareCalAcceptedShareSignalTests: XCTestCase {
 
         XCTAssertFalse(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
 
-        ShareCalAcceptedShareSignal.markAccepted(defaults: defaults, notificationCenter: NotificationCenter())
+        ShareCalAcceptedShareSignal.markAccepted(
+            partnerOwnerID: nil,
+            defaults: defaults,
+            notificationCenter: NotificationCenter()
+        )
 
         XCTAssertTrue(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
         XCTAssertFalse(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
@@ -3089,31 +2832,36 @@ final class ShareCalAcceptedShareSignalTests: XCTestCase {
 
         XCTAssertFalse(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
 
-        ShareCalAcceptedShareSignal.markAccepted(defaults: defaults, notificationCenter: NotificationCenter())
+        ShareCalAcceptedShareSignal.markAccepted(
+            partnerOwnerID: nil,
+            defaults: defaults,
+            notificationCenter: NotificationCenter()
+        )
 
         XCTAssertTrue(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
         XCTAssertTrue(ShareCalAcceptedShareSignal.consumePending(defaults: defaults))
         XCTAssertFalse(ShareCalAcceptedShareSignal.hasPending(defaults: defaults))
     }
 
-    func testStoresPendingPartnerICloudEmailForAcceptedShare() throws {
+    func testStoresPendingPartnerOwnerIDForAcceptedShare() throws {
         let suiteName = "ShareCalAcceptedShareSignalTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         ShareCalAcceptedShareSignal.markAccepted(
-            partnerICloudEmailAddress: " partner@icloud.com ",
+            partnerOwnerID: " _partnerOwner ",
             defaults: defaults,
             notificationCenter: NotificationCenter()
         )
 
         XCTAssertEqual(
-            ShareCalAcceptedShareSignal.consumePendingPartnerICloudEmailAddress(defaults: defaults),
-            "partner@icloud.com"
+            ShareCalAcceptedShareSignal.consumePendingPartnerOwnerID(defaults: defaults),
+            "_partnerOwner"
         )
-        XCTAssertNil(ShareCalAcceptedShareSignal.consumePendingPartnerICloudEmailAddress(defaults: defaults))
+        XCTAssertNil(ShareCalAcceptedShareSignal.consumePendingPartnerOwnerID(defaults: defaults))
     }
 }
+
 
 final class ForegroundSyncPlanTests: XCTestCase {
     func testAllowsAutomaticSyncWhenThereIsNoPreviousSync() {
@@ -3420,6 +3168,35 @@ final class CloudKitSharingFailureMessageTests: XCTestCase {
 }
 
 final class ShareCalLaunchDiagnosticPlanTests: XCTestCase {
+    func testPreparesPairingShareOnlyWhenLaunchArgumentIsPresent() {
+        XCTAssertTrue(
+            ShareCalLaunchDiagnosticPlan.shouldPreparePairingShare(
+                arguments: ["ShareCal", "-ShareCalPreparePairingShare"]
+            )
+        )
+        XCTAssertFalse(ShareCalLaunchDiagnosticPlan.shouldPreparePairingShare(arguments: ["ShareCal"]))
+    }
+
+    func testParsesAcceptShareURLArgumentValue() {
+        XCTAssertEqual(
+            ShareCalLaunchDiagnosticPlan.acceptShareURL(
+                arguments: ["ShareCal", "-ShareCalAcceptShareURL", "https://www.icloud.com/share/abc#Name"]
+            ),
+            URL(string: "https://www.icloud.com/share/abc#Name")
+        )
+        XCTAssertNil(
+            ShareCalLaunchDiagnosticPlan.acceptShareURL(arguments: ["ShareCal", "-ShareCalAcceptShareURL"])
+        )
+        XCTAssertNil(ShareCalLaunchDiagnosticPlan.acceptShareURL(arguments: ["ShareCal"]))
+    }
+
+    func testForcesSyncOnlyWhenLaunchArgumentIsPresent() {
+        XCTAssertTrue(
+            ShareCalLaunchDiagnosticPlan.shouldForceSync(arguments: ["ShareCal", "-ShareCalForceSync"])
+        )
+        XCTAssertFalse(ShareCalLaunchDiagnosticPlan.shouldForceSync(arguments: ["ShareCal"]))
+    }
+
     func testRunsCloudKitWriteProbeOnlyWhenLaunchArgumentIsPresent() {
         XCTAssertTrue(
             ShareCalLaunchDiagnosticPlan.shouldRunCloudKitWriteProbe(
@@ -3806,6 +3583,24 @@ final class CloudKitMirrorSyncPlanTests: XCTestCase {
         XCTAssertEqual(mirrors.map(\.mirrorKey), ["work:event-1:1800"])
     }
 
+    func testUploadsMirrorsWhoseShadowWasNeverConfirmedUploaded() {
+        // A pre-pairing sync records shadows without an upload stamp; once a
+        // partner exists those events must still be uploaded.
+        let existing = eventMirror(id: "event-1", title: "Planning")
+        let current = eventMirror(id: "event-1", title: "Planning")
+        let activeShadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false, lastUploadedAt: nil)
+        let existingShadow = localShadow(id: "event-1", fingerprint: "same", isTombstone: false, lastUploadedAt: nil)
+
+        let mirrors = CloudKitMirrorSyncPlan.mirrorsNeedingUpload(
+            [current],
+            activeShadows: [activeShadow],
+            existingShadows: [existingShadow],
+            existingLocalMirrors: [existing]
+        )
+
+        XCTAssertEqual(mirrors.map(\.mirrorKey), ["work:event-1:1800"])
+    }
+
     func testUploadsChangedActiveMirrors() {
         let existing = eventMirror(id: "event-1", title: "Planning")
         let current = eventMirror(id: "event-1", title: "Updated")
@@ -3885,7 +3680,8 @@ final class CloudKitMirrorSyncPlanTests: XCTestCase {
     private func localShadow(
         id: String,
         fingerprint: String,
-        isTombstone: Bool
+        isTombstone: Bool,
+        lastUploadedAt: Date? = Date(timeIntervalSince1970: 2_000)
     ) -> LocalEventShadow {
         LocalEventShadow(
             id: "work:\(id):1800",
@@ -3894,7 +3690,7 @@ final class CloudKitMirrorSyncPlanTests: XCTestCase {
             occurrenceStartDate: Date(timeIntervalSince1970: 1_800),
             fingerprint: fingerprint,
             cloudKitRecordName: "work:\(id):1800",
-            lastUploadedAt: Date(timeIntervalSince1970: 2_000),
+            lastUploadedAt: lastUploadedAt,
             isTombstone: isTombstone
         )
     }
@@ -3967,7 +3763,6 @@ final class CloudKitBatchUpsertPlanTests: XCTestCase {
             CloudKitForegroundQueryPlan.desiredKeys(forRecordType: MemberProfileRecordMapper.recordType),
             [
                 MemberProfileRecordMapper.Key.ownerMemberID,
-                MemberProfileRecordMapper.Key.pairingID,
                 MemberProfileRecordMapper.Key.displayName,
                 MemberProfileRecordMapper.Key.updatedAt
             ]
@@ -4002,16 +3797,16 @@ final class CloudKitBatchUpsertPlanTests: XCTestCase {
 }
 
 final class CloudKitRecordQueryFailurePlanTests: XCTestCase {
-    func testTreatsMissingCalendarAccessRequestRecordTypeAsEmpty() {
+    func testTreatsMissingMemberProfileRecordTypeAsEmpty() {
         let error = NSError(
             domain: CKError.errorDomain,
             code: CKError.Code.unknownItem.rawValue,
-            userInfo: [NSLocalizedDescriptionKey: "Did not find record type: CalendarAccessRequest"]
+            userInfo: [NSLocalizedDescriptionKey: "Did not find record type: MemberProfile"]
         )
 
         XCTAssertTrue(
             CloudKitRecordQueryFailurePlan.canTreatMissingRecordTypeAsEmpty(
-                recordType: CalendarAccessRequestRecordMapper.legacyRecordType,
+                recordType: MemberProfileRecordMapper.recordType,
                 error: error
             )
         )

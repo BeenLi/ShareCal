@@ -21,7 +21,7 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
-        ShareCalCloudKitShareAcceptanceHandler.accept(metadata: cloudKitShareMetadata)
+        ShareCalCloudKitShareAcceptanceHandler.handle(metadata: cloudKitShareMetadata)
     }
 }
 
@@ -72,11 +72,54 @@ enum ShareCalLaunchDiagnostics {
 
         if ShareCalLaunchDiagnosticPlan.shouldRunStopSharingProbe(arguments: arguments) {
             do {
-                try await services.cloudKit.stopSharing(ownerMemberID: settings.currentLocalOwnerID)
+                try await services.cloudKit.stopSharing(ownerMemberID: settings.currentMemberID)
                 NSLog("ShareCal stop sharing probe succeeded")
             } catch {
                 NSLog("ShareCal stop sharing probe failed: \(error)")
             }
+        }
+
+        if ShareCalLaunchDiagnosticPlan.shouldPreparePairingShare(arguments: arguments) {
+            do {
+                if !settings.hasSyncedMemberID {
+                    settings.currentMemberID = try await services.cloudKit.fetchCurrentUserRecordID()
+                }
+                if PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) == nil {
+                    settings.currentDisplayName = PairingSettingsPlan.randomDisplayName()
+                    settings.hasCompletedInitialProfilePrompt = true
+                }
+                let preparedShare = try await services.cloudKit.prepareShare(ownerMemberID: settings.currentMemberID)
+                try await services.cloudKit.saveMemberProfileForSync(
+                    ownerMemberID: settings.currentMemberID,
+                    displayName: settings.currentDisplayName
+                )
+                settings.iCloudSharingEnabled = true
+                settings.hasStartedPairing = true
+                settings.markPairingDateIfNeeded()
+                NSLog(
+                    "%@ %@",
+                    ShareCalLaunchDiagnosticPlan.pairingShareURLLogPrefix,
+                    preparedShare.share.url?.absoluteString ?? "missing"
+                )
+            } catch {
+                NSLog("ShareCal prepare pairing share probe failed: \(error)")
+            }
+        }
+
+        if let shareURL = ShareCalLaunchDiagnosticPlan.acceptShareURL(arguments: arguments) {
+            do {
+                let metadata = try await services.cloudKit.fetchShareMetadata(from: shareURL)
+                ShareCalCloudKitShareAcceptanceHandler.handle(metadata: metadata)
+                NSLog("ShareCal accept share probe handled metadata owner=%@", metadata.share.recordID.zoneID.ownerName)
+            } catch {
+                NSLog("ShareCal accept share probe failed: \(error)")
+            }
+        }
+
+        if ShareCalLaunchDiagnosticPlan.shouldForceSync(arguments: arguments) {
+            // Reuses the accepted-share signal channel: RootView consumes it and
+            // runs a foreground sync that bypasses the automatic-sync throttle.
+            ShareCalAcceptedShareSignal.markAccepted(partnerOwnerID: nil)
         }
     }
 }
