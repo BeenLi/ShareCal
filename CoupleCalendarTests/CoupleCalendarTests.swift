@@ -2877,7 +2877,7 @@ final class ForegroundSyncPlanTests: XCTestCase {
 
     func testSkipsAutomaticSyncWhenLastSyncIsWithinThrottleWindow() {
         let now = Date(timeIntervalSince1970: 1_000)
-        let lastSyncAt = now.addingTimeInterval(-299)
+        let lastSyncAt = now.addingTimeInterval(-(ForegroundSyncPlan.automaticThrottleInterval - 1))
 
         XCTAssertFalse(
             ForegroundSyncPlan.shouldRunAutomaticSync(
@@ -2887,6 +2887,13 @@ final class ForegroundSyncPlanTests: XCTestCase {
                 hasPendingAcceptedShare: false
             )
         )
+    }
+
+    func testAutomaticThrottleIsShortEnoughToFeelLive() {
+        // Tester feedback flagged the previous 5-minute throttle as "too slow";
+        // keep automatic refreshes within a minute so a partner's change shows up
+        // shortly after re-foregrounding or switching tabs.
+        XCTAssertLessThanOrEqual(ForegroundSyncPlan.automaticThrottleInterval, 60)
     }
 
     func testAllowsAutomaticSyncWhenThrottleWindowHasElapsed() {
@@ -2937,6 +2944,103 @@ final class ForegroundSyncPlanTests: XCTestCase {
                 hasPendingAcceptedShare: true
             )
         )
+    }
+}
+
+final class MemberDisplayNamePlanTests: XCTestCase {
+    func testSelfMemberUsesCurrentDisplayName() {
+        let name = MemberDisplayNamePlan.displayName(
+            forMemberID: "_me",
+            currentMemberID: "_me",
+            currentDisplayName: "Wanli",
+            selfFallback: "Me",
+            partnerDisplayName: "小鱼干"
+        )
+
+        XCTAssertEqual(name, "Wanli")
+    }
+
+    func testSelfMemberFallsBackWhenDisplayNameBlank() {
+        let name = MemberDisplayNamePlan.displayName(
+            forMemberID: "_me",
+            currentMemberID: "_me",
+            currentDisplayName: "   ",
+            selfFallback: "Me",
+            partnerDisplayName: "小鱼干"
+        )
+
+        XCTAssertEqual(name, "Me")
+    }
+
+    func testPartnerMemberUsesPartnerDisplayName() {
+        let name = MemberDisplayNamePlan.displayName(
+            forMemberID: "_82828b1d87c3d5e8685ae3b8c5a6c80a",
+            currentMemberID: "_me",
+            currentDisplayName: "Wanli",
+            selfFallback: "Me",
+            partnerDisplayName: "小鱼干"
+        )
+
+        XCTAssertEqual(name, "小鱼干")
+    }
+
+    func testNeverReturnsRawMemberID() {
+        let partnerID = "_82828b1d87c3d5e8685ae3b8c5a6c80a"
+        let name = MemberDisplayNamePlan.displayName(
+            forMemberID: partnerID,
+            currentMemberID: "_me",
+            currentDisplayName: nil,
+            selfFallback: "Me",
+            partnerDisplayName: "Partner"
+        )
+
+        XCTAssertNotEqual(name, partnerID)
+        XCTAssertEqual(name, "Partner")
+    }
+}
+
+final class InviteTimeAdjustmentPlanTests: XCTestCase {
+    func testMovingStartSlidesEndByTheSameAmount() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(90 * 60) // custom 90-minute duration
+        let newStart = start.addingTimeInterval(45 * 60)
+
+        let newEnd = InviteTimeAdjustmentPlan.endDate(
+            forNewStart: newStart,
+            previousStart: start,
+            previousEnd: end
+        )
+
+        XCTAssertEqual(newEnd, newStart.addingTimeInterval(90 * 60))
+    }
+
+    func testPreservesAtLeastOneHourWhenPriorDurationIsTooShort() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(10 * 60) // shorter than the 1h floor
+        let newStart = start.addingTimeInterval(60 * 60)
+
+        let newEnd = InviteTimeAdjustmentPlan.endDate(
+            forNewStart: newStart,
+            previousStart: start,
+            previousEnd: end
+        )
+
+        XCTAssertEqual(newEnd, newStart.addingTimeInterval(60 * 60))
+    }
+
+    func testKeepsEndAfterStartWhenMovingStartBackward() {
+        let start = Date(timeIntervalSince1970: 5_000)
+        let end = start.addingTimeInterval(60 * 60)
+        let newStart = start.addingTimeInterval(-30 * 60)
+
+        let newEnd = InviteTimeAdjustmentPlan.endDate(
+            forNewStart: newStart,
+            previousStart: start,
+            previousEnd: end
+        )
+
+        XCTAssertGreaterThan(newEnd, newStart)
+        XCTAssertEqual(newEnd, newStart.addingTimeInterval(60 * 60))
     }
 }
 

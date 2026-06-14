@@ -118,6 +118,14 @@ struct RootView: View {
                 await syncAfterSceneBecameActiveIfNeeded()
             }
         }
+        .onChange(of: selectedTab) { _, newTab in
+            // Opening Invites or Settings should reflect the partner's latest
+            // accepts/approvals; reuse the throttled path so it stays cheap.
+            guard newTab == .invites || newTab == .settings else { return }
+            Task {
+                await syncAfterSceneBecameActiveIfNeeded()
+            }
+        }
         .onChange(of: pairingStatus) { _, newStatus in
             guard newStatus == .paired else { return }
             Task {
@@ -1033,6 +1041,9 @@ struct CalendarTabView: View {
     }
 
     private func performSync() async {
+        // foregroundSync sets syncPhase = .syncing synchronously on entry, and
+        // everything here runs on the main actor, so this single guard already
+        // prevents overlapping/reentrant syncs from this screen.
         guard settings.syncPhase != .syncing else { return }
         let coordinator = SyncCoordinator(
             calendarAccess: services.calendarAccess,
@@ -2462,7 +2473,7 @@ struct CreateInviteView: View {
 
                     DatePicker(
                         strings.startsLabel,
-                        selection: $startDate,
+                        selection: startTimeBinding,
                         displayedComponents: .hourAndMinute
                     )
                     .disabled(isAllDay)
@@ -2535,6 +2546,27 @@ struct CreateInviteView: View {
             startDate
         } set: { newDate in
             moveInvite(toDayContaining: newDate)
+        }
+    }
+
+    // Moving the start time slides the end time to keep the chosen duration,
+    // matching the system calendar editor. The day row uses `dayBinding`, which
+    // preserves duration separately, so this stays scoped to the time picker.
+    private var startTimeBinding: Binding<Date> {
+        Binding {
+            startDate
+        } set: { newStart in
+            // All-day invites own start/end via `adjustForAllDay`; ignore any
+            // stray time-picker writes entirely so startDate can't drift.
+            guard !isAllDay else { return }
+            let previousStart = startDate
+            let previousEnd = endDate
+            startDate = newStart
+            endDate = InviteTimeAdjustmentPlan.endDate(
+                forNewStart: newStart,
+                previousStart: previousStart,
+                previousEnd: previousEnd
+            )
         }
     }
 
@@ -2783,7 +2815,7 @@ struct EventDetailView: View {
                         ForEach(eventComments) { comment in
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
-                                    Text(comment.authorMemberID)
+                                    Text(commentAuthorDisplayName(comment.authorMemberID))
                                         .font(.caption.weight(.semibold))
                                     Spacer()
                                     Text(comment.createdAt, format: .dateTime.hour().minute())
@@ -2816,6 +2848,14 @@ struct EventDetailView: View {
             }
             .navigationTitle(strings.eventTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // Opening an event should surface the partner's latest comments;
+                // run a throttled sync so it stays cheap on repeated opens.
+                await syncOnOpenIfNeeded()
+            }
+            .refreshable {
+                await performSync()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(strings.doneButton) {
@@ -2902,6 +2942,39 @@ struct EventDetailView: View {
             return settings.strings.allDay
         }
         return "\(event.startDate.formatted(date: .omitted, time: .shortened)) - \(event.endDate.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private func commentAuthorDisplayName(_ authorMemberID: String) -> String {
+        MemberDisplayNamePlan.displayName(
+            forMemberID: authorMemberID,
+            currentMemberID: settings.currentMemberID,
+            currentDisplayName: settings.currentDisplayName,
+            selfFallback: settings.strings.meTitle,
+            partnerDisplayName: settings.partnerStatusDisplayName
+        )
+    }
+
+    private func performSync() async {
+        // foregroundSync sets syncPhase = .syncing synchronously on entry, and
+        // everything here runs on the main actor, so this single guard already
+        // prevents overlapping/reentrant syncs from this screen.
+        guard settings.syncPhase != .syncing else { return }
+        let coordinator = SyncCoordinator(
+            calendarAccess: services.calendarAccess,
+            eventMirrorService: services.eventMirrorService,
+            cloudKit: services.cloudKitIfAvailable
+        )
+        await coordinator.foregroundSync(modelContext: modelContext, settings: settings)
+    }
+
+    private func syncOnOpenIfNeeded() async {
+        guard ForegroundSyncPlan.shouldRunAutomaticSync(
+            lastSyncAt: settings.lastSyncAt,
+            now: .now,
+            syncPhase: settings.syncPhase,
+            hasPendingAcceptedShare: false
+        ) else { return }
+        await performSync()
     }
 
     private func addComment() {
@@ -3012,6 +3085,22 @@ struct InvitesTabView: View {
             }
         }
         .navigationTitle(strings.invitesTab)
+        .refreshable {
+            await performSync()
+        }
+    }
+
+    private func performSync() async {
+        // foregroundSync sets syncPhase = .syncing synchronously on entry, and
+        // everything here runs on the main actor, so this single guard already
+        // prevents overlapping/reentrant syncs from this screen.
+        guard settings.syncPhase != .syncing else { return }
+        let coordinator = SyncCoordinator(
+            calendarAccess: services.calendarAccess,
+            eventMirrorService: services.eventMirrorService,
+            cloudKit: services.cloudKitIfAvailable
+        )
+        await coordinator.foregroundSync(modelContext: modelContext, settings: settings)
     }
 
     private func accept(_ invitation: EventInvitation) {
@@ -3130,10 +3219,13 @@ struct InvitesTabView: View {
     }
 
     private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
-        if requesterMemberID == settings.currentMemberID {
-            return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
-        }
-        return settings.partnerStatusDisplayName
+        MemberDisplayNamePlan.displayName(
+            forMemberID: requesterMemberID,
+            currentMemberID: settings.currentMemberID,
+            currentDisplayName: settings.currentDisplayName,
+            selfFallback: settings.strings.meTitle,
+            partnerDisplayName: settings.partnerStatusDisplayName
+        )
     }
 }
 
@@ -4244,10 +4336,13 @@ struct SettingsTabView: View {
     }
 
     private func displayName(forRequesterMemberID requesterMemberID: String) -> String {
-        if requesterMemberID == settings.currentMemberID {
-            return PairingSettingsPlan.normalizedDisplayName(settings.currentDisplayName) ?? settings.strings.meTitle
-        }
-        return settings.partnerStatusDisplayName
+        MemberDisplayNamePlan.displayName(
+            forMemberID: requesterMemberID,
+            currentMemberID: settings.currentMemberID,
+            currentDisplayName: settings.currentDisplayName,
+            selfFallback: settings.strings.meTitle,
+            partnerDisplayName: settings.partnerStatusDisplayName
+        )
     }
 
     @MainActor

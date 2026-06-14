@@ -1728,7 +1728,10 @@ enum SyncPhase: String {
 }
 
 enum ForegroundSyncPlan {
-    static let automaticThrottleInterval: TimeInterval = 5 * 60
+    // Re-foregrounding or switching tabs should reflect a partner's change
+    // quickly. A short throttle keeps automatic syncs from stampeding while
+    // still feeling live; manual pull-to-refresh bypasses this entirely.
+    static let automaticThrottleInterval: TimeInterval = 60
 
     static func shouldRunAutomaticSync(
         lastSyncAt: Date?,
@@ -1740,6 +1743,39 @@ enum ForegroundSyncPlan {
         if hasPendingAcceptedShare { return true }
         guard let lastSyncAt else { return true }
         return now.timeIntervalSince(lastSyncAt) >= automaticThrottleInterval
+    }
+}
+
+/// Resolves a member ID (the CloudKit `_`-prefixed userRecordID) to a
+/// human-readable nickname. Member IDs must never be shown raw in the UI.
+enum MemberDisplayNamePlan {
+    static func displayName(
+        forMemberID memberID: String,
+        currentMemberID: String,
+        currentDisplayName: String?,
+        selfFallback: String,
+        partnerDisplayName: String
+    ) -> String {
+        if memberID == currentMemberID {
+            return PairingSettingsPlan.normalizedDisplayName(currentDisplayName) ?? selfFallback
+        }
+        return partnerDisplayName
+    }
+}
+
+/// Keeps an invitation's end time trailing its start time by the previously
+/// chosen duration (at least one hour), matching the system calendar editor so
+/// moving Start no longer leaves End behind.
+enum InviteTimeAdjustmentPlan {
+    static let minimumDuration: TimeInterval = 60 * 60
+
+    static func endDate(
+        forNewStart newStart: Date,
+        previousStart: Date,
+        previousEnd: Date
+    ) -> Date {
+        let duration = max(minimumDuration, previousEnd.timeIntervalSince(previousStart))
+        return newStart.addingTimeInterval(duration)
     }
 }
 
