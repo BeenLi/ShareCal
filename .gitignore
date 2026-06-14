@@ -6,3 +6,6 @@ xcuserdata/
 *.moved-aside
 *.xccheckout
 *.xcscmblueprint
+
+# Machine-local Claude Code skills (e.g. plan-tree) — not shared via git
+.claude/skills/

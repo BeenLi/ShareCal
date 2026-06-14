@@ -4,6 +4,7 @@ import SwiftUI
 
 enum ShareCalTab {
     case calendar
+    case activity
     case invites
     case settings
 }
@@ -48,6 +49,7 @@ struct RootView: View {
     @State private var showPairingConflictAlert = false
     @Query(sort: \EventInvitation.startDate) private var invitations: [EventInvitation]
     @Query(sort: \CalendarAccessRequest.createdAt) private var accessRequests: [CalendarAccessRequest]
+    @Query(sort: \EventComment.createdAt) private var comments: [EventComment]
 
     private var pairingStatus: PairingStatus {
         PairingSettingsPlan.status(
@@ -62,6 +64,14 @@ struct RootView: View {
             invitations: invitations,
             accessRequests: accessRequests,
             currentMemberID: settings.currentMemberID
+        )
+    }
+
+    private var unreadActivityCount: Int {
+        ActivityFeedPlan.unreadCount(
+            comments: comments,
+            currentMemberID: settings.currentMemberID,
+            lastSeenActivityAt: settings.lastSeenActivityAt
         )
     }
 
@@ -80,6 +90,15 @@ struct RootView: View {
                 Label(settings.strings.calendarTab, systemImage: "calendar")
             }
             .tag(ShareCalTab.calendar)
+
+            NavigationStack {
+                ActivityTabView()
+            }
+            .tabItem {
+                Label(settings.strings.activityTab, systemImage: "bubble.left.and.bubble.right")
+            }
+            .badge(unreadActivityCount)
+            .tag(ShareCalTab.activity)
 
             NavigationStack {
                 InvitesTabView { invitation in
@@ -112,6 +131,13 @@ struct RootView: View {
                 await syncAfterAcceptedShareIfNeeded()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: ShareCalRemoteChangeSignal.notificationName)) { _ in
+            // A CloudKit silent push reported remote changes; pull so partner activity
+            // (and its local notifications) surface promptly.
+            Task {
+                await syncAfterSceneBecameActiveIfNeeded()
+            }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             Task {
@@ -119,9 +145,9 @@ struct RootView: View {
             }
         }
         .onChange(of: selectedTab) { _, newTab in
-            // Opening Invites or Settings should reflect the partner's latest
-            // accepts/approvals; reuse the throttled path so it stays cheap.
-            guard newTab == .invites || newTab == .settings else { return }
+            // Opening Activity, Invites or Settings should reflect the partner's
+            // latest comments/accepts/approvals; reuse the throttled path so it stays cheap.
+            guard newTab == .activity || newTab == .invites || newTab == .settings else { return }
             Task {
                 await syncAfterSceneBecameActiveIfNeeded()
             }
@@ -3007,6 +3033,104 @@ struct EventDetailView: View {
         } catch {
             inviteError = error.localizedDescription
         }
+    }
+}
+
+struct ActivityTabView: View {
+    @Environment(SettingsStore.self) private var settings
+    @Query(sort: \EventComment.createdAt) private var comments: [EventComment]
+    @Query(sort: \EventMirror.startDate) private var mirrors: [EventMirror]
+    @State private var selectedEvent: EventMirror?
+    @State private var seenSnapshot: Date?
+
+    private var items: [ActivityFeedItem] {
+        ActivityFeedPlan.items(
+            comments: comments,
+            mirrors: mirrors,
+            currentMemberID: settings.currentMemberID,
+            lastSeenActivityAt: seenSnapshot
+        )
+    }
+
+    var body: some View {
+        let strings = settings.strings
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView(
+                    strings.activityEmptyTitle,
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text(strings.activityEmptyMessage)
+                )
+            } else {
+                List(items) { item in
+                    Button {
+                        selectedEvent = mirror(for: item.eventMirrorID)
+                    } label: {
+                        ActivityFeedRow(item: item, authorName: authorName(for: item))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle(strings.activityTitle)
+        .sheet(item: $selectedEvent) { event in
+            EventDetailView(event: event)
+        }
+        .onAppear(perform: markActivitySeen)
+    }
+
+    /// Snapshot the previous last-seen time (so this visit still highlights what was
+    /// unread), then advance the stored marker to now so the tab badge clears.
+    private func markActivitySeen() {
+        seenSnapshot = settings.lastSeenActivityAt
+        settings.lastSeenActivityAt = .now
+    }
+
+    private func mirror(for id: String) -> EventMirror? {
+        mirrors.first { $0.id == id }
+    }
+
+    private func authorName(for item: ActivityFeedItem) -> String {
+        MemberDisplayNamePlan.displayName(
+            forMemberID: item.latestCommentAuthorMemberID,
+            currentMemberID: settings.currentMemberID,
+            currentDisplayName: settings.currentDisplayName,
+            selfFallback: settings.strings.meTitle,
+            partnerDisplayName: settings.partnerStatusDisplayName
+        )
+    }
+}
+
+private struct ActivityFeedRow: View {
+    let item: ActivityFeedItem
+    let authorName: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(item.hasUnread ? Color.accentColor : Color.clear)
+                .frame(width: 8, height: 8)
+                .padding(.top, 6)
+                .accessibilityHidden(!item.hasUnread)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.eventTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(item.latestCommentAt, format: .dateTime.month().day().hour().minute())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("\(authorName): \(item.latestCommentBody)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 }
 

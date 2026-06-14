@@ -2749,7 +2749,22 @@ final class CloudKitCoupleSpaceService {
     }
 
     func configureDatabaseSubscription() async throws {
-        let subscription = CKDatabaseSubscription(subscriptionID: "couplecalendar-database-subscription")
+        // Subscribe on BOTH databases: the partner's writes to my zone land in my
+        // private DB; new records the partner creates in their own zone land in my
+        // shared DB. Silent (content-available) pushes wake the app to fetch + post
+        // local notifications.
+        try await ensureDatabaseSubscription(
+            subscriptionID: "couplecalendar-database-subscription",
+            database: privateDatabase
+        )
+        try await ensureDatabaseSubscription(
+            subscriptionID: "couplecalendar-shared-database-subscription",
+            database: sharedDatabase
+        )
+    }
+
+    private func ensureDatabaseSubscription(subscriptionID: String, database: CKDatabase) async throws {
+        let subscription = CKDatabaseSubscription(subscriptionID: subscriptionID)
         let notificationInfo = CKSubscription.NotificationInfo()
         notificationInfo.shouldSendContentAvailable = true
         subscription.notificationInfo = notificationInfo
@@ -2763,7 +2778,7 @@ final class CloudKitCoupleSpaceService {
             operation.modifySubscriptionsResultBlock = { result in
                 continuation.resume(with: result)
             }
-            privateDatabase.add(operation)
+            database.add(operation)
         }
     }
 }

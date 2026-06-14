@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OSLog
 import SwiftData
+import UserNotifications
 
 private let syncLogger = Logger(
     subsystem: "com.leeberty.CoupleCalendar",
@@ -101,6 +102,16 @@ final class SettingsStore {
     var lastSyncAt: Date? {
         didSet { defaults.set(lastSyncAt, forKey: Key.lastSyncAt) }
     }
+    /// Local, per-device marker for when the user last viewed the 动态 (activity) tab.
+    /// Drives the unread comment count. Deliberately NOT synced (unlike EventComment.isRead).
+    var lastSeenActivityAt: Date? {
+        didSet { defaults.set(lastSeenActivityAt, forKey: Key.lastSeenActivityAt) }
+    }
+    /// Local high-water mark for the last time local notifications were evaluated, so
+    /// the same partner activity is never notified twice. Nil until the first sync.
+    var lastNotifiedAt: Date? {
+        didSet { defaults.set(lastNotifiedAt, forKey: Key.lastNotifiedAt) }
+    }
     var lastSyncError: String?
     var syncPhase: SyncPhase = .idle
 
@@ -138,6 +149,8 @@ final class SettingsStore {
         defaultVisibility = EventVisibility(rawValue: defaults.string(forKey: Key.defaultVisibility) ?? "") ?? .fullDetails
         appLanguage = AppLanguagePreference.read(from: defaults)
         lastSyncAt = defaults.object(forKey: Key.lastSyncAt) as? Date
+        lastSeenActivityAt = defaults.object(forKey: Key.lastSeenActivityAt) as? Date
+        lastNotifiedAt = defaults.object(forKey: Key.lastNotifiedAt) as? Date
     }
 
     var hasSyncedMemberID: Bool {
@@ -259,6 +272,8 @@ final class SettingsStore {
         static let selectedCalendarIDs = "selectedCalendarIDs"
         static let defaultVisibility = "defaultVisibility"
         static let lastSyncAt = "lastSyncAt"
+        static let lastSeenActivityAt = "lastSeenActivityAt"
+        static let lastNotifiedAt = "lastNotifiedAt"
     }
 
     private enum LegacyKey {
@@ -347,11 +362,50 @@ final class AppServices {
     }
 }
 
+/// Posts user-facing local notifications. Abstracted so the (untestable) UNUserNotificationCenter
+/// side effects stay out of SyncCoordinator's decision flow.
+@MainActor
+protocol LocalNotificationScheduling {
+    func post(_ notifications: [PlannedLocalNotification], strings: ShareCalStrings, partnerName: String) async
+}
+
+@MainActor
+struct UserNotificationScheduler: LocalNotificationScheduling {
+    func post(_ notifications: [PlannedLocalNotification], strings: ShareCalStrings, partnerName: String) async {
+        guard !notifications.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized
+            || settings.authorizationStatus == .provisional else { return }
+
+        for planned in notifications {
+            let content = UNMutableNotificationContent()
+            let text = LocalNotificationContentPlan.content(
+                for: planned.kind,
+                strings: strings,
+                partnerName: partnerName
+            )
+            content.title = text.title
+            content.body = text.body
+            content.sound = .default
+            // Reuse the stable id as the request identifier so the same underlying
+            // event is coalesced rather than duplicated across syncs.
+            let request = UNNotificationRequest(
+                identifier: planned.id,
+                content: content,
+                trigger: nil
+            )
+            try? await center.add(request)
+        }
+    }
+}
+
 @MainActor
 struct SyncCoordinator {
     let calendarAccess: CalendarAccessService
     let eventMirrorService: EventMirrorService
     let cloudKit: CloudKitCoupleSpaceService?
+    var notificationScheduler: LocalNotificationScheduling = UserNotificationScheduler()
 
     func foregroundSync(
         modelContext: ModelContext,
@@ -650,6 +704,7 @@ struct SyncCoordinator {
             try purge(mirrors: hardDeletedMirrors, modelContext: modelContext)
             try purgeShadows(mirrorKeys: hardDeletedMirrorKeys, modelContext: modelContext)
 
+            await postPendingNotifications(modelContext: modelContext, settings: settings, syncedAt: syncedAt)
             settings.lastSyncAt = .now
             settings.syncPhase = .idle
             timing.mark("finished")
@@ -658,6 +713,43 @@ struct SyncCoordinator {
             settings.syncPhase = .failed
             timing.mark("failed")
         }
+    }
+
+    /// After a sync imports the partner's latest data, surface anything new since the
+    /// last check as system notifications, then advance the high-water mark. Runs only
+    /// once a baseline exists (first sync just sets the baseline — see LocalNotificationPlan).
+    private func postPendingNotifications(
+        modelContext: ModelContext,
+        settings: SettingsStore,
+        syncedAt: Date
+    ) async {
+        let planned: [PlannedLocalNotification]
+        do {
+            let comments = try modelContext.fetch(FetchDescriptor<EventComment>())
+            let mirrors = try modelContext.fetch(FetchDescriptor<EventMirror>())
+            let invitations = try modelContext.fetch(FetchDescriptor<EventInvitation>())
+            let accessRequests = try modelContext.fetch(FetchDescriptor<CalendarAccessRequest>())
+            planned = LocalNotificationPlan.pending(
+                comments: comments,
+                mirrors: mirrors,
+                invitations: invitations,
+                accessRequests: accessRequests,
+                currentMemberID: settings.currentMemberID,
+                since: settings.lastNotifiedAt
+            )
+        } catch {
+            // Notifications are best-effort; never let them fail a sync.
+            settings.lastNotifiedAt = syncedAt
+            return
+        }
+        if !planned.isEmpty {
+            await notificationScheduler.post(
+                planned,
+                strings: settings.strings,
+                partnerName: settings.partnerStatusDisplayName
+            )
+        }
+        settings.lastNotifiedAt = syncedAt
     }
 
     private func localMirrors(ownerMemberID: String, modelContext: ModelContext) throws -> [EventMirror] {

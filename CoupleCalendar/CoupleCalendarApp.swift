@@ -2,8 +2,27 @@ import CloudKit
 import SwiftUI
 import SwiftData
 import UIKit
+import UserNotifications
 
-final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
+final class ShareCalAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    /// Present banners even when the app is in the foreground (e.g. a sync triggered by
+    /// switching tabs surfaces a new partner comment).
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound, .badge])
+    }
+
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
@@ -22,6 +41,53 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate {
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
         ShareCalCloudKitShareAcceptanceHandler.handle(metadata: cloudKitShareMetadata)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        // CloudKit silent (content-available) push: ask the live UI to pull changes,
+        // which then posts any resulting local notifications.
+        ShareCalRemoteChangeSignal.notifyChanged()
+        completionHandler(.newData)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        NSLog("ShareCal registered for remote notifications")
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        NSLog("ShareCal failed to register for remote notifications: \(error)")
+    }
+}
+
+@MainActor
+enum ShareCalNotificationSetup {
+    /// Request notification authorization, register for CloudKit silent pushes, and
+    /// ensure the database subscriptions exist. No-op when CloudKit is disabled.
+    static func configure(services: AppServices) async {
+        guard services.isCloudKitEnabled else { return }
+        let center = UNUserNotificationCenter.current()
+        do {
+            _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+        } catch {
+            NSLog("ShareCal notification authorization error: \(error)")
+        }
+        UIApplication.shared.registerForRemoteNotifications()
+        guard let cloudKit = services.cloudKitIfAvailable else { return }
+        do {
+            try await cloudKit.configureDatabaseSubscription()
+        } catch {
+            NSLog("ShareCal subscription setup error: \(error)")
+        }
     }
 }
 
@@ -151,6 +217,7 @@ struct CoupleCalendarApp: App {
                 .modelContainer(modelContainer)
                 .task {
                     await ShareCalLaunchDiagnostics.runIfRequested(services: services, settings: settings)
+                    await ShareCalNotificationSetup.configure(services: services)
                 }
         }
     }
