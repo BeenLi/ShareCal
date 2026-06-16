@@ -4479,6 +4479,29 @@ final class LocalNotificationPlanTests: XCTestCase {
         XCTAssertEqual(planned.map(\.id), ["comment-\(c.id)"])
     }
 
+    func testEventOnlyChangesProduceNoNotifications() {
+        // Decision 0002 (silent-push model): a sync whose only changes are the
+        // partner's calendar events (EventMirror) must produce zero user-facing
+        // notifications. This is the invariant that keeps switching the CloudKit
+        // push to silent from resurrecting the phantom "动态" notifications — the
+        // shared-DB subscription fires on every mirror write, but nothing about a
+        // calendar-event change is notification-worthy on its own.
+        let planned = LocalNotificationPlan.pending(
+            comments: [],
+            mirrors: [
+                mirror(id: "P1", owner: partner, title: "New partner event"),
+                mirror(id: "P2", owner: partner, title: "Edited partner event"),
+                mirror(id: "M1", owner: me, title: "My event"),
+            ],
+            invitations: [],
+            accessRequests: [],
+            currentMemberID: me,
+            since: since
+        )
+
+        XCTAssertTrue(planned.isEmpty)
+    }
+
     private func comment(event: String, author: String, body: String, at seconds: TimeInterval) -> EventComment {
         EventComment(
             eventMirrorID: event,
@@ -4593,5 +4616,53 @@ final class LocalNotificationContentPlanTests: XCTestCase {
         XCTAssertNotEqual(approved.title, declined.title)
         XCTAssertFalse(approved.title.isEmpty)
         XCTAssertFalse(declined.title.isEmpty)
+    }
+}
+
+final class BackgroundRefreshSchedulePlanTests: XCTestCase {
+    func testSchedulesOnlyWhenCloudKitEnabledAndPairingActive() {
+        // Unpaired install has nothing to fetch — don't spend background budget.
+        XCTAssertFalse(BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: true, hasStartedPairing: false,
+            partnerShareOwnerID: nil, outgoingShareParticipantIDs: []
+        ))
+        // Pairing started (outgoing share created) — schedule.
+        XCTAssertTrue(BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: true, hasStartedPairing: true,
+            partnerShareOwnerID: nil, outgoingShareParticipantIDs: []
+        ))
+        // Has a confirmed partner — schedule.
+        XCTAssertTrue(BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: true, hasStartedPairing: false,
+            partnerShareOwnerID: "_partner", outgoingShareParticipantIDs: []
+        ))
+        // Outgoing participants present — schedule.
+        XCTAssertTrue(BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: true, hasStartedPairing: false,
+            partnerShareOwnerID: nil, outgoingShareParticipantIDs: ["_p"]
+        ))
+    }
+
+    func testNeverSchedulesWhenCloudKitDisabled() {
+        // LOCAL_SIGNING / CloudKit-off builds must never arm a background sync.
+        XCTAssertFalse(BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: false, hasStartedPairing: true,
+            partnerShareOwnerID: "_partner", outgoingShareParticipantIDs: ["_p"]
+        ))
+    }
+
+    func testEarliestBeginDateClampsToFifteenMinuteFloor() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        // iOS won't run BGAppRefresh more than ~once/15min; a smaller ask is clamped up.
+        let clamped = BackgroundRefreshSchedulePlan.earliestBeginDate(from: now, requestedInterval: 60)
+        XCTAssertEqual(clamped, now.addingTimeInterval(BackgroundRefreshSchedulePlan.minimumInterval))
+        // A larger interval is respected verbatim.
+        let large = BackgroundRefreshSchedulePlan.earliestBeginDate(from: now, requestedInterval: 3_600)
+        XCTAssertEqual(large, now.addingTimeInterval(3_600))
+        XCTAssertEqual(BackgroundRefreshSchedulePlan.minimumInterval, 15 * 60)
+    }
+
+    func testTaskIdentifierMatchesBundlePrefix() {
+        XCTAssertEqual(BackgroundRefreshSchedulePlan.taskIdentifier, "com.leeberty.CoupleCalendar.refresh")
     }
 }

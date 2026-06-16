@@ -1,3 +1,4 @@
+import BackgroundTasks
 import Foundation
 import Observation
 import OSLog
@@ -935,5 +936,101 @@ struct SyncCoordinator {
             modelContext.delete(mirror)
         }
         try modelContext.save()
+    }
+}
+
+/// Runs the sync pipeline from background entry points (silent CloudKit push,
+/// BGAppRefresh) — outside the SwiftUI view tree that drives foreground syncs
+/// (notifications decision 0002). Holds the SAME SettingsStore/AppServices/container
+/// instances the UI uses, so background writes propagate to the live UI and the
+/// existing-iCloud-data safety gate is honored everywhere.
+///
+/// Lives here (not in CoupleCalendarApp.swift) because the @main file is not a member
+/// of the test target; the scene delegate that schedules refreshes needs this type
+/// visible when the app sources are compiled into the test bundle.
+@MainActor
+final class ShareCalBackgroundSyncRunner {
+    static let shared = ShareCalBackgroundSyncRunner()
+
+    private var modelContainer: ModelContainer?
+    private var settings: SettingsStore?
+    private var services: AppServices?
+    private var isRunning = false
+
+    private init() {}
+
+    func configure(modelContainer: ModelContainer, settings: SettingsStore, services: AppServices) {
+        self.modelContainer = modelContainer
+        self.settings = settings
+        self.services = services
+    }
+
+    /// Runs the full sync pipeline to completion. Returns true if a sync actually ran
+    /// (i.e. new partner data may have been fetched), false if it was skipped.
+    @discardableResult
+    func runSync() async -> Bool {
+        guard let modelContainer, let settings, let services else { return false }
+        guard services.isCloudKitEnabled else { return false }
+        guard !isRunning, settings.syncPhase != .syncing else { return false }
+        // Honor the existing-iCloud-data recovery gate exactly as the foreground callers
+        // do (notifications decision 0001): never auto-sync/merge while the user has not
+        // decided what to do with pre-existing iCloud data. The gate is a pure function
+        // of SettingsStore, so the background path enforces it identically.
+        guard !ExistingICloudDataRecoveryPlan.shouldDeferAutomaticSync(
+            hasResolvedPrompt: settings.hasResolvedExistingICloudDataPrompt,
+            hasStartedPairing: settings.hasStartedPairing,
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs,
+            lastSyncAt: settings.lastSyncAt
+        ) else { return false }
+
+        isRunning = true
+        defer { isRunning = false }
+
+        let context = ModelContext(modelContainer)
+        let coordinator = SyncCoordinator(
+            calendarAccess: services.calendarAccess,
+            eventMirrorService: services.eventMirrorService,
+            cloudKit: services.cloudKitIfAvailable
+        )
+        // A push / BGAppRefresh is itself the authoritative "there may be new data"
+        // signal, so force the CloudKit leg (bypasses the time throttle, still guards
+        // against concurrent runs above).
+        await coordinator.foregroundSync(modelContext: context, settings: settings, forceCloudKit: true)
+        return true
+    }
+
+    /// Queue the next opportunistic background refresh, when one is worthwhile. No-op
+    /// for unpaired or CloudKit-disabled installs (nothing to fetch).
+    func scheduleAppRefresh() {
+        guard let settings, let services else { return }
+        guard BackgroundRefreshSchedulePlan.shouldSchedule(
+            isCloudKitEnabled: services.isCloudKitEnabled,
+            hasStartedPairing: settings.hasStartedPairing,
+            partnerShareOwnerID: settings.partnerShareOwnerID,
+            outgoingShareParticipantIDs: settings.outgoingShareParticipantIDs
+        ) else { return }
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundRefreshSchedulePlan.taskIdentifier)
+        request.earliestBeginDate = BackgroundRefreshSchedulePlan.earliestBeginDate(from: Date())
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            // submit fails on the simulator and when over budget; best-effort only.
+            NSLog("ShareCal BGAppRefresh submit failed: \(error)")
+        }
+    }
+
+    /// Run a scheduled BGAppRefresh: chain the next one first (so the cadence survives
+    /// even if this run is killed), run the sync within the OS time budget, and always
+    /// report completion. Expiration cancels the in-flight sync; the next run catches up
+    /// because the pipeline is idempotent and `lastNotifiedAt` only advances after
+    /// notifications post.
+    func handleAppRefresh(_ task: BGAppRefreshTask) {
+        scheduleAppRefresh()
+        let work = Task { @MainActor in
+            await runSync()
+            task.setTaskCompleted(success: !Task.isCancelled)
+        }
+        task.expirationHandler = { work.cancel() }
     }
 }

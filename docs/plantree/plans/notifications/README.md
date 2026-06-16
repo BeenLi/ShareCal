@@ -10,13 +10,14 @@
 4. 历史访问请求 / 其回复
 
 ## Status
-- Status: **✅ Code landed（2026-06-14）** — 纯逻辑 9 单测通过、全套 215 通过、模拟器启动无崩溃。
-- **剩余**：端到端推送送达需两台真机 + 两个 iCloud 账号手动验证（见 roadmap「Needs manual verification」）。
+- Status: **✅ v2 Code landed（2026-06-16）** — 上线后两条反馈（幻影动态推送 + 后台同步）已落地，见 [decisions/0002](decisions/0002-silent-push-and-background-sync.md)；220 单测全过。**剩**：两真机端到端验证（见 [roadmap](roadmap.md)「Needs manual verification」v2）。
+- 前序：v1 交付架构 **✅ Code landed（2026-06-14）** — 纯逻辑 9 单测通过、全套 215 通过、模拟器启动无崩溃。
 - 依赖 [../activity-feed/](../activity-feed/) 已完成。
 
 ## File map
 - [roadmap.md](roadmap.md)
-- [decisions/0001-triggers-and-delivery.md](decisions/0001-triggers-and-delivery.md) — 触发范围 + 交付架构
+- [decisions/0001-triggers-and-delivery.md](decisions/0001-triggers-and-delivery.md) — 触发范围 + 交付架构（v1）
+- [decisions/0002-silent-push-and-background-sync.md](decisions/0002-silent-push-and-background-sync.md) — 改静默推送（抑制纯事件推送）+ 后台同步（v2，反馈修复）
 
 ## 现状（已核实，见 baseline）
 - 推送权限 `aps-environment` 已配（dev+prod）。
@@ -26,6 +27,6 @@
 ## Open questions
 - OQ1 核实 `remote-notification` 后台模式是否在 pbxproj/Info.plist 中（baseline 标记待核实）。
 - OQ2 APNs 生产链路：TestFlight(prod) 证书 / `aps-environment=production` 推送是否打通。
-- OQ3 静默推送的系统节流与 App 被杀时的可靠性，是否需要兜底（前台 `foregroundSync` 已有）。
+- ~~OQ3 静默推送的系统节流与 App 被杀时的可靠性，是否需要兜底~~ → **已解决（[0002](decisions/0002-silent-push-and-background-sync.md)）**：接受可靠性上限（前台打开是唯一保证），加 `BGAppRefreshTask` 兜底收窄窗口。
 - OQ4 通知与 in-app 角标的去重 / 已读联动。
 - OQ5 两端各自在 private database 上订阅的具体实现（见 baseline 两人制数据流说明）。

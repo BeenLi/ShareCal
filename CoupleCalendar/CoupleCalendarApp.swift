@@ -1,3 +1,4 @@
+import BackgroundTasks
 import CloudKit
 import SwiftUI
 import SwiftData
@@ -10,6 +11,21 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // BGTaskScheduler requires the handler be registered before launch finishes.
+        // The launch handler fires minutes-to-hours later, by which time the App's
+        // init has configured the shared runner (notifications decision 0002).
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: BackgroundRefreshSchedulePlan.taskIdentifier,
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Task { @MainActor in
+                ShareCalBackgroundSyncRunner.shared.handleAppRefresh(refreshTask)
+            }
+        }
         return true
     }
 
@@ -56,10 +72,18 @@ final class ShareCalAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        // CloudKit silent (content-available) push: ask the live UI to pull changes,
-        // which then posts any resulting local notifications.
-        ShareCalRemoteChangeSignal.notifyChanged()
-        completionHandler(.newData)
+        // CloudKit silent (content-available) push (decision 0002): run the sync to
+        // completion right here in the background, then report. The shared runner uses
+        // the SAME SettingsStore/AppServices instances as the live UI, so a delivery
+        // while the app is foregrounded updates the UI too — no separate signal needed.
+        // The pipeline's tail (postPendingNotifications) posts rich local notifications
+        // only for comment/invite/access activity, so plain calendar-event changes wake
+        // a sync silently without any user-facing banner.
+        Task { @MainActor in
+            ShareCalBackgroundSyncRunner.shared.scheduleAppRefresh()
+            let didRun = await ShareCalBackgroundSyncRunner.shared.runSync()
+            completionHandler(didRun ? .newData : .noData)
+        }
     }
 
     func application(
@@ -202,7 +226,7 @@ enum ShareCalLaunchDiagnostics {
 struct CoupleCalendarApp: App {
     @UIApplicationDelegateAdaptor(ShareCalAppDelegate.self) private var appDelegate
     @State private var settings: SettingsStore
-    @State private var services = AppServices()
+    @State private var services: AppServices
 
     private let modelContainer: ModelContainer = {
         do {
@@ -214,7 +238,17 @@ struct CoupleCalendarApp: App {
 
     init() {
         ShareCalUITestLaunchPlan.resetUserDefaultsIfRequested()
-        _settings = State(initialValue: SettingsStore())
+        let settings = SettingsStore()
+        let services = AppServices()
+        _settings = State(initialValue: settings)
+        _services = State(initialValue: services)
+        // Share the live instances with the background runner so background syncs
+        // update the same observed state the UI renders (notifications decision 0002).
+        ShareCalBackgroundSyncRunner.shared.configure(
+            modelContainer: modelContainer,
+            settings: settings,
+            services: services
+        )
     }
 
     var body: some Scene {

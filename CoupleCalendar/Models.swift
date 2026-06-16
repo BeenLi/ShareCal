@@ -536,6 +536,45 @@ enum ShareCalRemoteChangeSignal {
     }
 }
 
+/// Pure policy for the `BGAppRefreshTask` fallback that keeps partner data fresh when
+/// silent CloudKit pushes get throttled or dropped (notifications plan, decision 0002).
+/// The OS glue (`BGTaskScheduler` register/submit, running the sync) lives in the app
+/// delegate; this enum holds only the decisions worth unit-testing: whether scheduling
+/// is even worthwhile, and the earliest the next refresh may run.
+enum BackgroundRefreshSchedulePlan {
+    /// Must match the entry in Info.plist `BGTaskSchedulerPermittedIdentifiers`.
+    static let taskIdentifier = "com.leeberty.CoupleCalendar.refresh"
+
+    /// iOS treats BGAppRefresh as opportunistic and won't dispatch it more than roughly
+    /// once every 15 minutes; requesting a shorter interval is silently ignored, so we
+    /// clamp up to this floor instead of pretending we can sync more often.
+    static let minimumInterval: TimeInterval = 15 * 60
+
+    /// Only schedule when a CloudKit sync would actually pull partner data. An unpaired
+    /// (or CloudKit-disabled) install has nothing to fetch, so arming a background task
+    /// would just burn the system's background budget for no benefit.
+    static func shouldSchedule(
+        isCloudKitEnabled: Bool,
+        hasStartedPairing: Bool,
+        partnerShareOwnerID: String?,
+        outgoingShareParticipantIDs: [String]
+    ) -> Bool {
+        guard isCloudKitEnabled else { return false }
+        return hasStartedPairing
+            || partnerShareOwnerID != nil
+            || !outgoingShareParticipantIDs.isEmpty
+    }
+
+    /// Earliest the next refresh may run. `requestedInterval` is clamped up to
+    /// `minimumInterval` so we never ask iOS for a cadence it will discard.
+    static func earliestBeginDate(
+        from referenceDate: Date,
+        requestedInterval: TimeInterval = minimumInterval
+    ) -> Date {
+        referenceDate.addingTimeInterval(max(requestedInterval, minimumInterval))
+    }
+}
+
 enum ShareCalAcceptedShareSignal {
     static let notificationName = Notification.Name("ShareCalAcceptedCloudKitShare")
     private static let pendingSyncKey = "ShareCalPendingAcceptedCloudKitShareSync"

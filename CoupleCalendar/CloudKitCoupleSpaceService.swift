@@ -164,6 +164,17 @@ final class ShareCalSceneDelegate: UIResponder, UIWindowSceneDelegate {
         NSLog("ShareCal scene delegate received CloudKit share metadata")
         ShareCalCloudKitShareAcceptanceHandler.handle(metadata: cloudKitShareMetadata)
     }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        // This app uses the UIScene lifecycle, so background transitions land here —
+        // NOT on UIApplicationDelegate.applicationDidEnterBackground (never called once
+        // a scene delegate exists). Queue the opportunistic BGAppRefresh every time we
+        // background so partner data keeps catching up when silent pushes are throttled
+        // or dropped (notifications decision 0002).
+        Task { @MainActor in
+            ShareCalBackgroundSyncRunner.shared.scheduleAppRefresh()
+        }
+    }
 }
 
 enum ShareCalSceneDelegateConfigurationPlan {
@@ -2766,17 +2777,18 @@ final class CloudKitCoupleSpaceService {
     private func ensureDatabaseSubscription(subscriptionID: String, database: CKDatabase) async throws {
         let subscription = CKDatabaseSubscription(subscriptionID: subscriptionID)
         let notificationInfo = CKSubscription.NotificationInfo()
-        // Deliver a VISIBLE alert rather than relying on a silent (content-available)
-        // push: silent pushes are throttled/dropped under the system's background budget,
-        // so a backgrounded or terminated app could miss them entirely. A visible alert
-        // is delivered by APNs without needing background execution. The wording is
-        // generic because shared-database subscriptions cannot embed record fields in the
-        // push; rich per-item detail still appears in the in-app 动态 feed and in the
-        // local notifications posted on the next foreground sync.
-        notificationInfo.title = "ShareCal"
-        notificationInfo.alertBody = "有新的共享日程动态 · New shared activity"
-        notificationInfo.soundName = "default"
-        notificationInfo.shouldBadge = true
+        // Deliver a SILENT (content-available) push, NOT a visible alert (notifications
+        // plan, decision 0002). A database subscription fires on EVERY record change and
+        // cannot filter by record type or embed fields, so a visible alert was forced to
+        // be generic ("有新的共享日程动态") — and it fired on the partner's *calendar
+        // event* edits (the common case), steering users to the comments-only 动态 tab
+        // where nothing had changed (the "phantom notification" feedback). Instead we
+        // wake the app silently, run a sync, and let LocalNotificationPlan decide what is
+        // notification-worthy (comments / invites / access — never plain event edits).
+        // The trade-off (accepted): silent pushes can be throttled/dropped and won't run
+        // if the app is force-quit; the BGAppRefresh fallback (BackgroundRefreshSchedulePlan)
+        // narrows that window, and a foreground open remains the only guaranteed sync.
+        notificationInfo.shouldSendContentAvailable = true
         subscription.notificationInfo = notificationInfo
 
         let operation = CKModifySubscriptionsOperation(
