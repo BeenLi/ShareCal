@@ -240,6 +240,14 @@ struct CoupleCalendarApp: App {
         ShareCalUITestLaunchPlan.resetUserDefaultsIfRequested()
         let settings = SettingsStore()
         let services = AppServices()
+        // Test harness: dismiss the first-run profile / existing-iCloud-data sheets by
+        // seeding the app's own UserDefaults before the view tree appears. Inert in
+        // normal launches (no -ShareCalSeedProfileName argument).
+        if let profileName = ShareCalLaunchDiagnosticPlan.seedProfileName() {
+            settings.currentDisplayName = profileName
+            settings.hasCompletedInitialProfilePrompt = true
+            settings.hasResolvedExistingICloudDataPrompt = true
+        }
         _settings = State(initialValue: settings)
         _services = State(initialValue: services)
         // Share the live instances with the background runner so background syncs

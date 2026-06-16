@@ -376,6 +376,10 @@ enum ShareCalLaunchDiagnosticPlan {
     static let preparePairingShareArgument = "-ShareCalPreparePairingShare"
     static let acceptShareURLArgument = "-ShareCalAcceptShareURL"
     static let forceSyncArgument = "-ShareCalForceSync"
+    /// Test-harness only: seed a display name + mark onboarding/recovery prompts resolved
+    /// in the app's own UserDefaults at launch, so automation isn't blocked by the
+    /// first-run profile sheet. Inert without the argument (normal launches ignore it).
+    static let seedProfileNameArgument = "-ShareCalSeedProfileName"
     static let cloudKitWriteProbeRecordType = "CoupleSpace"
     /// Marker for scripts that grep the unified log for the share invitation URL.
     static let pairingShareURLLogPrefix = "ShareCalPairingShareURL:"
@@ -402,6 +406,10 @@ enum ShareCalLaunchDiagnosticPlan {
 
     static func shouldForceSync(arguments: [String]) -> Bool {
         arguments.contains(forceSyncArgument)
+    }
+
+    static func seedProfileName(arguments: [String] = ProcessInfo.processInfo.arguments) -> String? {
+        value(after: seedProfileNameArgument, arguments: arguments)
     }
 
     static func acceptShareURL(arguments: [String]) -> URL? {

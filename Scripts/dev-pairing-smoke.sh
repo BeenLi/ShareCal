@@ -14,6 +14,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DERIVED="$ROOT_DIR/build/dev-smoke"
 APP_PATH="$DERIVED/Build/Products/Debug-iphonesimulator/CoupleCalendar.app"
 
+# Console-wait timeouts (seconds), tunable via env. Defaults are generous because a
+# CKShare between iCloud accounts in DIFFERENT storage regions (e.g. China GCBD ↔
+# US/global) must coordinate across data centers, so share acceptance and the first
+# cross-zone read can take minutes. Bump these (or export them higher) for cross-region
+# accounts; same-region pairs complete much faster.
+SHARE_URL_TIMEOUT="${SHARE_URL_TIMEOUT:-300}"     # create share + log invite URL
+SYNC_TIMEOUT="${SYNC_TIMEOUT:-300}"               # a foreground sync to finish
+ACCEPT_TIMEOUT="${ACCEPT_TIMEOUT:-900}"           # accept a share (cross-region sensitive)
+IMPORT_TIMEOUT="${IMPORT_TIMEOUT:-900}"           # import partner's mirror after accept
+PARTICIPANT_TIMEOUT="${PARTICIPANT_TIMEOUT:-900}" # see partner as accepted participant
+
 log() { printf '\n\033[1;36m[smoke]\033[0m %s\n' "$*"; }
 fail() { printf '\n\033[1;31m[smoke FAILED]\033[0m %s\n' "$*"; exit 1; }
 
@@ -25,11 +36,18 @@ mkdir -p "$CONSOLE_DIR" 2>/dev/null || true
 # (info-level OSLog lines are not persisted on simulators).
 launch_app() { # launch_app <udid> <console-log-name> [args...]
   local udid="$1" logname="$2"; shift 2
+  # Seed the profile in the app's OWN UserDefaults so the first-run nickname /
+  # existing-iCloud-data sheets never block automation. (seed_defaults writes the
+  # device-level domain, which iOS does not reliably merge as the app's fallback.)
+  local profile_name="SmokeUser"
+  [ "$udid" = "$OWNER_UDID" ] && profile_name="SmokeOwner"
+  [ "$udid" = "$PARTNER_UDID" ] && profile_name="SmokePartner"
   xcrun simctl terminate "$udid" "$BUNDLE_ID" 2>/dev/null || true
   sleep 1
   CONSOLE_LOG="$CONSOLE_DIR/$logname.log"
   : > "$CONSOLE_LOG"
-  (xcrun simctl launch --console-pty "$udid" "$BUNDLE_ID" "$@" > "$CONSOLE_LOG" 2>&1 &)
+  (xcrun simctl launch --console-pty "$udid" "$BUNDLE_ID" \
+     -ShareCalSeedProfileName "$profile_name" "$@" > "$CONSOLE_LOG" 2>&1 &)
 }
 
 wait_for_console() { # wait_for_console <console-log> <pattern> <timeout-seconds> <description>
@@ -101,7 +119,7 @@ seed_defaults "$PARTNER_UDID" "SmokePartner"
 # ---------- 1. Owner: seed event + create share, capture invite URL ----------
 log "Owner: seeding test event and preparing pairing share..."
 launch_app "$OWNER_UDID" "owner-prepare" -ShareCalSeedCalendarEvent -ShareCalPreparePairingShare
-URL_LINE=$(wait_for_console "$CONSOLE_LOG" "ShareCalPairingShareURL:" 120 "owner share URL")
+URL_LINE=$(wait_for_console "$CONSOLE_LOG" "ShareCalPairingShareURL:" $SHARE_URL_TIMEOUT "owner share URL")
 SHARE_URL=$(echo "$URL_LINE" | grep -oE 'https://[^" ]+' | tail -1)
 [ -n "$SHARE_URL" ] && [ "$SHARE_URL" != "missing" ] || fail "no share URL captured"
 log "Share URL: $SHARE_URL"
@@ -110,13 +128,13 @@ log "Share URL: $SHARE_URL"
 # sync to upload the seeded event mirror before the partner looks for it.
 log "Owner: syncing to upload the seeded event mirror..."
 launch_app "$OWNER_UDID" "owner-upload" -ShareCalForceSync
-wait_for_console "$CONSOLE_LOG" "foregroundSync finished" 240 "owner mirror upload sync"
+wait_for_console "$CONSOLE_LOG" "foregroundSync finished" $SYNC_TIMEOUT "owner mirror upload sync"
 
 # ---------- 2. Partner: accept share via URL (no system prompt) ----------
 log "Partner: accepting owner's share..."
 launch_app "$PARTNER_UDID" "partner-accept" -ShareCalAcceptShareURL "$SHARE_URL"
-wait_for_console "$CONSOLE_LOG" "acceptShare succeeded" 180 "partner share acceptance"
-wait_for_console "$CONSOLE_LOG" "fetchSharedEventMirrors fetched records=[1-9]" 240 \
+wait_for_console "$CONSOLE_LOG" "acceptShare succeeded" $ACCEPT_TIMEOUT "partner share acceptance"
+wait_for_console "$CONSOLE_LOG" "fetchSharedEventMirrors fetched records=[1-9]" $IMPORT_TIMEOUT \
   "partner importing owner's event mirror"
 
 # ---------- 3. Partner: share back ----------
@@ -124,28 +142,28 @@ log "Partner: preparing reverse share..."
 launch_app "$PARTNER_UDID" "partner-prepare" \
   -ShareCalSeedCalendarEvent -ShareCalSeedCalendarEventTitle "Partner Smoke Event" \
   -ShareCalPreparePairingShare
-URL_LINE2=$(wait_for_console "$CONSOLE_LOG" "ShareCalPairingShareURL:" 120 "partner share URL")
+URL_LINE2=$(wait_for_console "$CONSOLE_LOG" "ShareCalPairingShareURL:" $SHARE_URL_TIMEOUT "partner share URL")
 SHARE_URL2=$(echo "$URL_LINE2" | grep -oE 'https://[^" ]+' | tail -1)
 [ -n "$SHARE_URL2" ] && [ "$SHARE_URL2" != "missing" ] || fail "no reverse share URL captured"
 log "Reverse share URL: $SHARE_URL2"
 
 log "Partner: syncing to upload its event mirror..."
 launch_app "$PARTNER_UDID" "partner-upload" -ShareCalForceSync
-wait_for_console "$CONSOLE_LOG" "foregroundSync finished" 240 "partner mirror upload sync"
+wait_for_console "$CONSOLE_LOG" "foregroundSync finished" $SYNC_TIMEOUT "partner mirror upload sync"
 
 # ---------- 4. Owner: accept reverse share, verify mutual pairing ----------
 log "Owner: accepting partner's share..."
 launch_app "$OWNER_UDID" "owner-accept" -ShareCalAcceptShareURL "$SHARE_URL2"
-wait_for_console "$CONSOLE_LOG" "acceptShare succeeded" 180 "owner share acceptance"
-wait_for_console "$CONSOLE_LOG" "fetchSharedEventMirrors fetched records=[1-9]" 240 \
+wait_for_console "$CONSOLE_LOG" "acceptShare succeeded" $ACCEPT_TIMEOUT "owner share acceptance"
+wait_for_console "$CONSOLE_LOG" "fetchSharedEventMirrors fetched records=[1-9]" $IMPORT_TIMEOUT \
   "owner importing partner's event mirror"
-wait_for_console "$CONSOLE_LOG" "fetchOutgoingShareParticipantIDs succeeded count=1" 240 \
+wait_for_console "$CONSOLE_LOG" "fetchOutgoingShareParticipantIDs succeeded count=1" $PARTICIPANT_TIMEOUT \
   "owner sees partner as accepted participant (userRecordID available)"
 
 # ---------- 5. Partner: one more sync so it sees the owner joined its share ----------
 log "Partner: final sync to confirm mutual state..."
 launch_app "$PARTNER_UDID" "partner-final" -ShareCalForceSync
-wait_for_console "$CONSOLE_LOG" "fetchOutgoingShareParticipantIDs succeeded count=1" 240 \
+wait_for_console "$CONSOLE_LOG" "fetchOutgoingShareParticipantIDs succeeded count=1" $PARTICIPANT_TIMEOUT \
   "partner sees owner as accepted participant"
 xcrun simctl terminate "$OWNER_UDID" "$BUNDLE_ID" 2>/dev/null || true
 xcrun simctl terminate "$PARTNER_UDID" "$BUNDLE_ID" 2>/dev/null || true
