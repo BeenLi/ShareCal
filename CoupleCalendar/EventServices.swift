@@ -318,6 +318,12 @@ enum InvitationListPlan {
         invitations.filter { $0.archivedAt == nil }
     }
 
+    /// Orders invitations so the schedule nearest to now (the most recent start date)
+    /// sits at the top, instead of the oldest invitation leading the list.
+    static func sortedForDisplay(_ invitations: [EventInvitation]) -> [EventInvitation] {
+        invitations.sorted { $0.startDate > $1.startDate }
+    }
+
     static func canOpenInCalendar(_ invitation: EventInvitation) -> Bool {
         invitation.status == .accepted
     }

@@ -287,7 +287,26 @@ echo "$OWNER_PROBE2" | grep -q "$PARTNER_COMMENT" \
   || fail "owner did NOT see the partner's reply ('$PARTNER_COMMENT') — thread is NOT symmetric. Probe: $OWNER_PROBE2"
 log "Owner sees BOTH comments ✓ (joint comment thread is symmetric)"
 
+# ---------- 10. Joint event UI: tapping the green block opens the comment thread ----------
+# Steps 8-9 prove the comment DATA pipeline; this proves the partner can actually REACH it
+# from the calendar UI — the green joint block must be tappable and open the comment thread
+# (regression guard for making the block a Button instead of an offset .onTapGesture).
+log "Partner: verifying the joint event opens its comment thread on tap (XCUITest)..."
+JOINT_UI_RESULT="$DERIVED/joint-comment-ui.xcresult"
+rm -rf "$JOINT_UI_RESULT"
+TEST_RUNNER_SHARECAL_SMOKE_UI=1 xcodebuild test \
+  -project "$ROOT_DIR/CoupleCalendar.xcodeproj" -scheme CoupleCalendar \
+  -configuration Debug -destination "platform=iOS Simulator,id=$PARTNER_UDID" \
+  -parallel-testing-enabled NO \
+  -derivedDataPath "$DERIVED" \
+  -resultBundlePath "$JOINT_UI_RESULT" \
+  -only-testing:CoupleCalendarUITests/CoupleCalendarUITests/testPairedPartnerCanOpenJointEventCommentThread \
+  CODE_SIGN_ENTITLEMENTS=CoupleCalendar/CoupleCalendar.entitlements \
+  "SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG" \
+  -quiet || fail "partner could not open the joint event's comment thread from the UI (see $JOINT_UI_RESULT)"
+log "Partner opened the joint event comment thread from the UI (screenshot in $JOINT_UI_RESULT)."
+
 xcrun simctl terminate "$OWNER_UDID" "$BUNDLE_ID" 2>/dev/null || true
 xcrun simctl terminate "$PARTNER_UDID" "$BUNDLE_ID" 2>/dev/null || true
 
-log "✅ PASS: mutual two-person pairing established, events synced both ways, the partner UI renders the owner's event, and a joint event's comment thread is shared symmetrically across both partners."
+log "✅ PASS: mutual two-person pairing established, events synced both ways, the partner UI renders the owner's event, a joint event's comment thread is shared symmetrically across both partners, and the joint block opens its comment thread on tap."

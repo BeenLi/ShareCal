@@ -3613,6 +3613,16 @@ final class InvitationListPlanTests: XCTestCase {
         XCTAssertTrue(InvitationListPlan.canDelete(invitation(id: "canceled", status: .canceled)))
     }
 
+    func testSortsInvitationsNearestToNowFirst() {
+        let old = invitation(id: "old", status: .accepted, startDate: Date(timeIntervalSince1970: 10_000))
+        let mid = invitation(id: "mid", status: .accepted, startDate: Date(timeIntervalSince1970: 20_000))
+        let recent = invitation(id: "recent", status: .accepted, startDate: Date(timeIntervalSince1970: 30_000))
+
+        let sorted = InvitationListPlan.sortedForDisplay([old, recent, mid])
+
+        XCTAssertEqual(sorted.map(\.id), ["recent", "mid", "old"])
+    }
+
     func testArchivedInvitationsAreHiddenFromInvitesList() {
         let visible = invitation(id: "visible", status: .accepted)
         let archived = invitation(
@@ -3682,6 +3692,7 @@ final class InvitationListPlanTests: XCTestCase {
         status: InvitationStatus,
         creatorMemberID: String = "me",
         inviteeMemberID: String = "partner",
+        startDate: Date = Date(timeIntervalSince1970: 10_000),
         archivedAt: Date? = nil
     ) -> EventInvitation {
         EventInvitation(
@@ -3689,8 +3700,8 @@ final class InvitationListPlanTests: XCTestCase {
             creatorMemberID: creatorMemberID,
             inviteeMemberID: inviteeMemberID,
             title: "Dinner",
-            startDate: Date(timeIntervalSince1970: 10_000),
-            endDate: Date(timeIntervalSince1970: 12_000),
+            startDate: startDate,
+            endDate: startDate.addingTimeInterval(2_000),
             location: nil,
             notes: nil,
             statusRawValue: status.rawValue,

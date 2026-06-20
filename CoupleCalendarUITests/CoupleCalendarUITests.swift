@@ -102,6 +102,78 @@ final class CoupleCalendarUITests: XCTestCase {
         XCTAssertTrue(appeared, "Partner's calendar must render the owner's synced event '\(ownerEventTitle)'.")
     }
 
+    /// Regression guard for the joint-event comment entry point: the green joint block
+    /// must be tappable (it is now a Button, matching the regular lane events) and open
+    /// the shared comment thread. Runs only inside the pairing smoke after the joint
+    /// event + comment round-trip has been established. Self-skips otherwise.
+    func testPairedPartnerCanOpenJointEventCommentThread() throws {
+        guard ProcessInfo.processInfo.environment["SHARECAL_SMOKE_UI"] != nil else {
+            throw XCTSkip("Runs only inside Scripts/dev-pairing-smoke.sh after the joint-comment round-trip.")
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ShareCalSeedProfileName", "SmokePartner", "-ShareCalForceSync"]
+        app.launch()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+
+        // Reach the joint block via the real user flow rather than assuming the joint event
+        // is on "today": open the 邀请 (Invites) tab, tap the accepted invitation row (which
+        // focuses the calendar on the invitation's own date), then tap the green joint block.
+        // This is date-independent — the smoke event need not fall on the current day.
+        let invitesTab = app.buttons["邀请"]
+        let invitesDeadline = Date(timeIntervalSinceNow: 180)
+        var invitesReady = invitesTab.waitForExistence(timeout: 3)
+        while !invitesReady && Date() < invitesDeadline {
+            dismissBlockingModal(app: app, springboard: springboard)
+            invitesReady = invitesTab.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(invitesReady, "The Invites tab must be reachable.")
+        invitesTab.tap()
+
+        // The accepted invitation row carries the smoke event title. Wait for it (the CloudKit
+        // invitation import is async after the forced sync), then tap to focus it in calendar.
+        let invitationRow = app.staticTexts["ShareCal E2E Smoke Test"].firstMatch
+        var rowReady = invitationRow.waitForExistence(timeout: 3)
+        let rowDeadline = Date(timeIntervalSinceNow: 180)
+        while !rowReady && Date() < rowDeadline {
+            // Re-pull to refresh the invites list while the import lands.
+            invitesTab.tap()
+            rowReady = invitationRow.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(rowReady, "The accepted invitation must appear in the Invites tab.")
+        invitationRow.tap()
+
+        // Focusing navigates to the calendar on the invitation's date with the joint block
+        // visible. Match the GREEN joint block specifically by its joint-schedule word
+        // ("共同"/"Together"), which ordinary per-lane mirror events never carry.
+        let jointPredicate = NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "共同", "Together")
+        let jointBlock = app.buttons.matching(jointPredicate).firstMatch
+        let appeared = jointBlock.waitForExistence(timeout: 30)
+
+        let calendarShot = XCTAttachment(screenshot: app.screenshot())
+        calendarShot.name = "joint-event-focused-on-calendar"
+        calendarShot.lifetime = .keepAlways
+        add(calendarShot)
+
+        XCTAssertTrue(appeared, "The green joint event block must render as a tappable element on its date.")
+
+        jointBlock.tap()
+
+        // Opening the joint detail must surface the shared comment thread's input field —
+        // the same EventCommentsSection that regular events use. A bare calendar screen
+        // has no text field, so its presence proves the detail (and comments) opened.
+        let commentField = app.textFields.firstMatch
+        let opened = commentField.waitForExistence(timeout: 15)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "joint-event-comment-thread"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        XCTAssertTrue(opened, "Tapping the joint event must open its comment thread (a comment input field).")
+    }
+
     /// Dismisses one blocking modal if present. The seed-profile launch args suppress
     /// the in-app advisory sheets, so in practice this only clears the SpringBoard-owned
     /// notification-permission alert (which has no settings flag). The in-app dismiss

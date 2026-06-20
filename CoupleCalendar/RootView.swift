@@ -1013,7 +1013,10 @@ struct CalendarTabView: View {
                             WeekAgendaView(
                                 days: weekAgendaDays,
                                 mirrorByID: visibleMirrorByID,
-                                onSelect: { selectedEvent = $0 }
+                                onSelect: { selectedEvent = $0 },
+                                onSelectJoint: { item in
+                                    selectedJointEvent = visibleJointEvents.first { $0.id == item.id }
+                                }
                             )
                         }
                     }
@@ -1682,50 +1685,6 @@ struct SyncStatusBar: View {
     }
 }
 
-struct TwoColumnTimelineList: View {
-    let myTitle: String
-    let mySubtitle: String
-    let myEvents: [EventMirror]
-    let jointEvents: [JointScheduleEvent]
-    let partnerTitle: String
-    let partnerSubtitle: String
-    let partnerEvents: [EventMirror]
-    let availableWidth: CGFloat
-    let onSelect: (EventMirror) -> Void
-
-    var columnWidth: CGFloat {
-        max(160, (availableWidth - 30) / 2)
-    }
-
-    var body: some View {
-        VStack(spacing: 10) {
-            if !jointEvents.isEmpty {
-                JointTimelineList(jointEvents: jointEvents)
-            }
-
-            HStack(alignment: .top, spacing: 10) {
-                TimelineColumn(
-                    title: myTitle,
-                    subtitle: mySubtitle,
-                    events: myEvents,
-                    tint: .blue,
-                    width: columnWidth,
-                    onSelect: onSelect
-                )
-
-                TimelineColumn(
-                    title: partnerTitle,
-                    subtitle: partnerSubtitle,
-                    events: partnerEvents,
-                    tint: .pink,
-                    width: columnWidth,
-                    onSelect: onSelect
-                )
-            }
-        }
-    }
-}
-
 struct DayAlignedTimelineView: View {
     @Environment(SettingsStore.self) private var settings
     let dayStart: Date
@@ -1822,18 +1781,25 @@ struct DayAlignedTimelineView: View {
                             let placement = jointPlacements[event.id] ?? DayTimelineJointPlacement(columnIndex: 0, columnCount: 1)
                             let slotWidth = max(44, (jointWidth - 8) / CGFloat(placement.columnCount))
 
-                            DayTimelineJointEventBlock(
-                                event: event,
-                                isFocused: event.id == focusedJointEventID
-                            )
+                            // Use a Button (not .onTapGesture) so the green joint block
+                            // hit-tests as reliably as the regular lane events in
+                            // DayTimelineLane — an offset .onTapGesture view did not
+                            // dependably open the comment detail.
+                            Button {
+                                onSelectJoint(event)
+                            } label: {
+                                DayTimelineJointEventBlock(
+                                    event: event,
+                                    isFocused: event.id == focusedJointEventID
+                                )
+                            }
+                            .buttonStyle(.plain)
                             .frame(width: max(44, slotWidth - 4), height: eventHeight, alignment: .top)
                             .offset(
                                 x: railWidth + railSpacing + 4 + (CGFloat(placement.columnIndex) * slotWidth),
                                 y: eventY
                             )
                             .accessibilityLabel("\(event.title), \(timeText(for: event)), \(event.calendarTitle), \(settings.strings.jointScheduleLabel)")
-                            .contentShape(Rectangle())
-                            .onTapGesture { onSelectJoint(event) }
                         }
 
                         DayTimelineNowIndicatorOverlay(
@@ -2232,180 +2198,11 @@ struct DayTimelineJointEventBlock: View {
     }
 }
 
-struct JointTimelineList: View {
-    @Environment(SettingsStore.self) private var settings
-    let jointEvents: [JointScheduleEvent]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(settings.strings.jointScheduleLabel, systemImage: "person.2.fill")
-                    .font(.headline)
-                    .foregroundStyle(.green)
-                Spacer()
-                Text("\(jointEvents.count)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-            }
-
-            ForEach(jointEvents) { event in
-                JointEventCard(event: event)
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color.green.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-struct JointEventCard: View {
-    @Environment(SettingsStore.self) private var settings
-    let event: JointScheduleEvent
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Rectangle()
-                .fill(Color.green)
-                .frame(width: 4)
-                .clipShape(Capsule())
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-
-                Text("\(event.calendarTitle) · \(settings.strings.jointScheduleLabel)")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .lineLimit(1)
-
-                Text(timeText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let location = event.location, !location.isEmpty {
-                    Label(location, systemImage: "mappin.and.ellipse")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    var timeText: String {
-        if event.isAllDay {
-            return settings.strings.allDay
-        }
-        return "\(event.startDate.formatted(date: .omitted, time: .shortened)) - \(event.endDate.formatted(date: .omitted, time: .shortened))"
-    }
-}
-
-struct TimelineColumn: View {
-    @Environment(SettingsStore.self) private var settings
-    let title: String
-    let subtitle: String
-    let events: [EventMirror]
-    let tint: Color
-    let width: CGFloat
-    let onSelect: (EventMirror) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.headline)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("\(events.count)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
-            }
-
-            if events.isEmpty {
-                ContentUnavailableView(settings.strings.noEvents, systemImage: "calendar.badge.clock")
-                    .frame(minHeight: 220)
-            } else {
-                LazyVStack(spacing: 8) {
-                    ForEach(events) { event in
-                        Button {
-                            onSelect(event)
-                        } label: {
-                            EventCard(event: event, tint: tint)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .frame(width: width, alignment: .top)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-struct EventCard: View {
-    @Environment(SettingsStore.self) private var settings
-    let event: EventMirror
-    let tint: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top) {
-                Rectangle()
-                    .fill(Color(hex: event.calendarColorHex) ?? tint)
-                    .frame(width: 4)
-                    .clipShape(Capsule())
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-
-                    Text(timeText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if let location = event.location, !location.isEmpty {
-                        Label(location, systemImage: "mappin.and.ellipse")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    var timeText: String {
-        if event.isAllDay {
-            return settings.strings.allDay
-        }
-        return "\(event.startDate.formatted(date: .omitted, time: .shortened)) - \(event.endDate.formatted(date: .omitted, time: .shortened))"
-    }
-}
-
 struct WeekAgendaView: View {
     let days: [WeekAgendaDay]
     let mirrorByID: [String: EventMirror]
     let onSelect: (EventMirror) -> Void
+    let onSelectJoint: (WeekAgendaItem) -> Void
 
     var body: some View {
         ScrollView {
@@ -2414,7 +2211,8 @@ struct WeekAgendaView: View {
                     WeekAgendaDaySection(
                         day: day,
                         mirrorByID: mirrorByID,
-                        onSelect: onSelect
+                        onSelect: onSelect,
+                        onSelectJoint: onSelectJoint
                     )
                 }
             }
@@ -2429,6 +2227,7 @@ struct WeekAgendaDaySection: View {
     let day: WeekAgendaDay
     let mirrorByID: [String: EventMirror]
     let onSelect: (EventMirror) -> Void
+    let onSelectJoint: (WeekAgendaItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2462,6 +2261,15 @@ struct WeekAgendaDaySection: View {
                         if let mirrorID = item.mirrorID, let mirror = mirrorByID[mirrorID] {
                             Button {
                                 onSelect(mirror)
+                            } label: {
+                                WeekAgendaItemCard(item: item)
+                            }
+                            .buttonStyle(.plain)
+                        } else if item.kind == .joint {
+                            // Joint items carry no mirror; their id is the invitation id.
+                            // Make them tappable so the shared comment thread opens here too.
+                            Button {
+                                onSelectJoint(item)
                             } label: {
                                 WeekAgendaItemCard(item: item)
                             }
@@ -3392,7 +3200,9 @@ struct InvitesTabView: View {
             }
 
             ForEach(InvitationStatus.allCases) { status in
-                let filtered = visibleInvitations.filter { $0.status == status }
+                let filtered = InvitationListPlan.sortedForDisplay(
+                    visibleInvitations.filter { $0.status == status }
+                )
                 if !filtered.isEmpty {
                     Section(strings.invitationStatusTitle(for: status)) {
                         ForEach(filtered) { invitation in
