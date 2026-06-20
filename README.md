@@ -139,3 +139,11 @@ xcodebuild -project CoupleCalendar.xcodeproj -scheme CoupleCalendar \
 
 - 代码架构与约定见 [CLAUDE.md](CLAUDE.md)。
 - CloudKit Schema 部署、固定双模拟器冒烟测试、停止共享隐私验证等运维流程见 [docs/development.md](docs/development.md)。
+
+## 开源协议
+
+本项目采用 [MIT 协议](LICENSE) 开源，可自由使用、修改与分发，仅需保留版权与许可声明。
+
+## 致谢
+
+- [SeemSeam/plan-tree](https://github.com/SeemSeam/plan-tree) —— 本项目开发时使用的规划工作流 skill（作为本地工具使用，不随仓库分发），感谢其作者。
