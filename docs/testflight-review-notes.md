@@ -1,19 +1,17 @@
-# ShareCal TestFlight Review Notes
+# OurDays App Review Notes
 
-Use this document when moving ShareCal from the rejected public App Store submission to private TestFlight testing.
+Reviewer-facing notes for OurDays (bundle `com.leeberty.CoupleCalendar`), covering both the public App Store review and the external TestFlight beta. The app was previously rejected as "ShareCal" under Guideline 4.3(a); it has since been rebranded to OurDays with strengthened positioning and resubmitted to the public App Store.
 
-## Public Submission Cleanup
+## Current Submission Status
 
-1. Open App Store Connect > ShareCal > App Review.
-2. Open the unresolved iOS submission for version 1.0.
-3. Remove the rejected App Version item from the submission instead of resubmitting it for public App Review.
-4. Do not use "Resubmit to App Review" for the public listing unless the product direction changes back to public App Store distribution.
+- Public App Store: v1.3 (build 30) submitted for review as OurDays (the v1.0 "ShareCal" submission was rejected under 4.3(a); product direction has since returned to public App Store distribution). Release type is MANUAL.
+- TestFlight: the external public link remains active for invited testers.
 
-## TestFlight Test Information
+## Test Information
 
-### Beta App Description
+### App Description
 
-ShareCal is a private shared calendar beta for invited couples. It lets two invited users mirror selected Apple Calendar events into a private iCloud share, view both schedules side by side, send event invitations, and comment on shared events. The beta is intended for invited testers only while we validate the iCloud sharing workflow and calendar privacy controls.
+OurDays is a private shared calendar for invited couples. It lets two invited users mirror selected Apple Calendar events into a private iCloud share, view both schedules side by side, send event invitations, and comment on shared events.
 
 ### What to Test
 
@@ -23,9 +21,9 @@ Please test the first-run flow, calendar permission request, selected calendar s
 
 Use the same support email configured for the Apple Developer account, or a monitored project inbox for TestFlight feedback.
 
-## Beta App Review Notes
+## Reviewer Notes
 
-OurDays is being submitted for private TestFlight beta testing, not for public App Store release. The beta is for invited couples who want to test private iCloud calendar sharing.
+These reviewer steps apply to both the public App Store review and the TestFlight beta. No sign-in is required; OurDays is for two invited users who privately share selected calendars.
 
 Reviewer steps:
 
@@ -49,4 +47,4 @@ Notes:
 - Upload a new build before the active TestFlight build expires.
 - Keep external tester groups limited to invited users.
 - Review TestFlight crash reports and feedback weekly while the beta is active.
-- Only return to public App Store submission after the app has a stronger public positioning, non-template screenshots, and App Review notes that explain its unique value.
+- Keep the public App Store listing's positioning strong: non-template screenshots and review notes that explain the unique two-person value (this is what the v1.0 4.3(a) rejection turned on).

@@ -1,5 +1,7 @@
 # ShareCal App Review Appeal Draft
 
+> **SUPERSEDED — historical record (May 2026).** This draft was the appeal of the v1.0 "ShareCal" 4.3(a) rejection. The product direction has since returned to public App Store distribution: the app was rebranded to **OurDays** and resubmitted as **v1.3 (build 30)** with strengthened positioning. Keep this only as a record of the original appeal; do not treat it as current state.
+
 Use this draft for the Apple Developer "Submit an appeal to App Review" form.
 
 ## Current Form State

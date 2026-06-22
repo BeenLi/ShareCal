@@ -8,7 +8,7 @@
 - **Track C — 自定义域名 leeberty.uk**：用户新购 `leeberty.uk`（Cloudflare 托管），接为整站 apex 自定义域名 + HTTPS + Cloudflare 代理。
 
 ## Non-goals
-- ~~不重新提交公开 App Store 上架（之前 4.3 Spam 被拒，方向仍是 TestFlight）。~~ **已反转（2026-06-22，用户确认）**：v1.3 (build 28) 已重新提交公开 App Store 审核（强化差异化描述/关键词/Review Notes 以应对当初 4.3(a)），状态 `WAITING_FOR_REVIEW`。
+- ~~不重新提交公开 App Store 上架（之前 4.3 Spam 被拒，方向仍是 TestFlight）。~~ **已反转（2026-06-22，用户确认）**：v1.3 (build 30) 已作为 **OurDays**（由 ShareCal 改名）重新提交公开 App Store 审核（强化差异化描述/关键词/Review Notes 以应对当初 4.3(a)），状态 `WAITING_FOR_REVIEW`。
 - 不引入第三人/多人共享（与 CLAUDE.md 铁律冲突）。
 - 不续费/恢复 `beenli.cn`（已废弃；站点先回退 github.io，后改用 `leeberty.uk`，见 Track C / decision 0001 §1）。
 - 不追求中国大陆 CDN 加速（`.uk` 不可备案、Cloudflare 免费版无大陆节点；仅取边缘缓存/稳定性）。
