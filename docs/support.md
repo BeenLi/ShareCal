@@ -1,12 +1,12 @@
-# ShareCal Support
+# OurDays Support
 
-Last updated: May 25, 2026
+Last updated: June 22, 2026
 
-ShareCal is currently in beta testing.
+OurDays is a private shared calendar for invited couples: two people mirror selected Apple Calendar events into a private iCloud share, view both schedules side by side, send event invitations, and comment on shared events.
 
 ## Getting Help
 
-If you are testing ShareCal through TestFlight, open TestFlight, select ShareCal, and use "Send Beta Feedback" to report issues.
+Report an issue by email to the support address configured for the app, or — if you are using a TestFlight build — open TestFlight, select OurDays, and use "Send Beta Feedback".
 
 When reporting a problem, include:
 
@@ -18,7 +18,7 @@ When reporting a problem, include:
 
 ## Common Requirements
 
-ShareCal requires:
+OurDays requires:
 
 - iOS 18 or later.
 - An iCloud account signed in on the device.
@@ -27,4 +27,4 @@ ShareCal requires:
 
 ## Privacy
 
-Read the ShareCal privacy policy for details about calendar data, iCloud sharing, and TestFlight feedback.
+Read the OurDays privacy policy for details about calendar data and iCloud sharing.
