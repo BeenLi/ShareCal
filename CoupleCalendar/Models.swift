@@ -104,8 +104,8 @@ struct ShareCalStrings {
     var setupCalendarAccessTitle: String { text("Choose Calendars to Share", "选择要共享的日历") }
     var setupCalendarAccessMessage: String {
         text(
-            "Allow calendar access, then choose which calendars ShareCal can share.",
-            "请先授权日历访问，然后选择 ShareCal 可以共享哪些日历。"
+            "Allow calendar access, then choose which calendars OurDays can share.",
+            "请先授权日历访问，然后选择 OurDays 可以共享哪些日历。"
         )
     }
     var setupCalendarAccessButton: String { text("Go to Calendar Settings", "前往日历设置") }
@@ -156,8 +156,8 @@ struct ShareCalStrings {
     var initialProfilePromptTitle: String { text("Set Your Nickname", "设置我的昵称") }
     var initialProfilePromptMessage: String {
         text(
-            "This name helps your partner recognize you in ShareCal.",
-            "这个昵称会用于让对方在 ShareCal 中认出你。"
+            "This name helps your partner recognize you in OurDays.",
+            "这个昵称会用于让对方在 OurDays 中认出你。"
         )
     }
     var partnerNotePromptTitle: String { text("Set Partner Note", "设置对方备注名") }
@@ -170,8 +170,8 @@ struct ShareCalStrings {
     var pairingSafetyNoticeTitle: String { text("Before You Reinstall", "卸载或重装前请先解除配对") }
     var pairingSafetyNoticeMessage: String {
         text(
-            "ShareCal's iCloud sharing data is separate from your local calendars. Unpair before uninstalling or reinstalling this app. Deleting ShareCal iCloud data will not delete your original calendars or events in the system Calendar app.",
-            "ShareCal 的 iCloud 共享数据与本地日历是隔离的。卸载或重装本 App 前，请先解除配对。删除 ShareCal 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
+            "OurDays' iCloud sharing data is separate from your local calendars. Unpair before uninstalling or reinstalling this app. Deleting OurDays iCloud data will not delete your original calendars or events in the system Calendar app.",
+            "OurDays 的 iCloud 共享数据与本地日历是隔离的。卸载或重装本 App 前，请先解除配对。删除 OurDays 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
         )
     }
     var existingICloudDataPromptTitle: String {
@@ -179,8 +179,8 @@ struct ShareCalStrings {
     }
     var existingICloudDataPromptMessage: String {
         text(
-            "This install looks new, but previous ShareCal iCloud data still exists for this Apple ID. If you no longer want to keep sharing, delete it now. ShareCal's iCloud data is separate from your local calendars, and deleting it will not delete your original calendars or events in the system Calendar app.",
-            "这次安装看起来是全新的，但这个 Apple ID 之前的 ShareCal iCloud 数据仍然存在。如果你不打算继续共享，建议现在删除。ShareCal 的 iCloud 数据与本地日历是隔离的，删除它不会删除系统日历中的原始日历或事件。"
+            "This install looks new, but previous OurDays iCloud data still exists for this Apple ID. If you no longer want to keep sharing, delete it now. OurDays' iCloud data is separate from your local calendars, and deleting it will not delete your original calendars or events in the system Calendar app.",
+            "这次安装看起来是全新的，但这个 Apple ID 之前的 OurDays iCloud 数据仍然存在。如果你不打算继续共享，建议现在删除。OurDays 的 iCloud 数据与本地日历是隔离的，删除它不会删除系统日历中的原始日历或事件。"
         )
     }
     var continueExistingICloudDataButton: String {
@@ -196,7 +196,7 @@ struct ShareCalStrings {
     var requestingCalendarAccess: String { text("Requesting calendar access...", "正在请求日历访问权限...") }
     var refreshCalendarsButton: String { text("Refresh Calendars", "刷新日历") }
     var calendarsToShareSection: String { text("Calendars to Share", "要共享的日历") }
-    var createShareCalCalendarButton: String { text("Create ShareCal Calendar", "创建 ShareCal 日历") }
+    var createShareCalCalendarButton: String { text("Create Shared Calendar", "创建共享日历") }
     var noCalendarsLoaded: String { text("No calendars loaded", "没有已加载的日历") }
     var privacySection: String { text("Privacy", "隐私") }
     var defaultVisibilityPicker: String { text("Default visibility", "默认可见性") }
@@ -279,8 +279,8 @@ struct ShareCalStrings {
     }
     var pairingSafetyPersistentWarningMessage: String {
         text(
-            "ShareCal's iCloud sharing data is separate from your local calendars. Removing ShareCal iCloud data will not delete your original calendars or events in the system Calendar app.",
-            "ShareCal 的 iCloud 共享数据与本地日历是隔离的。删除 ShareCal 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
+            "OurDays' iCloud sharing data is separate from your local calendars. Removing OurDays iCloud data will not delete your original calendars or events in the system Calendar app.",
+            "OurDays 的 iCloud 共享数据与本地日历是隔离的。删除 OurDays 的 iCloud 数据不会删除系统日历中的原始日历或事件。"
         )
     }
     var pairingConflictTitle: String { text("Pairing Conflict", "配对冲突") }
@@ -318,8 +318,8 @@ struct ShareCalStrings {
     var deleteICloudDataConfirmationTitle: String { text("Delete My iCloud Data?", "删除我的 iCloud 数据？") }
     var deleteICloudDataConfirmationMessage: String {
         text(
-            "This stops sharing, deletes your ShareCal iCloud data, leaves your partner's share, and clears the local ShareCal cache. It will not delete original events from the system Calendar app.",
-            "这会停止共享、删除你上传到 iCloud 的 ShareCal 数据、退出对方的共享，并清除本地 ShareCal 缓存。它不会删除系统日历中的原始日程。"
+            "This stops sharing, deletes your OurDays iCloud data, leaves your partner's share, and clears the local OurDays cache. It will not delete original events from the system Calendar app.",
+            "这会停止共享、删除你上传到 iCloud 的 OurDays 数据、退出对方的共享，并清除本地 OurDays 缓存。它不会删除系统日历中的原始日程。"
         )
     }
     var deleteICloudDataSucceeded: String { text("iCloud data deleted.", "iCloud 数据已删除。") }
@@ -343,8 +343,8 @@ struct ShareCalStrings {
         text("Calendar access was not granted. Open Settings to enable it.", "未获得日历访问权限。请打开设置启用。")
     }
     var calendarAccessRequestFailed: String { text("Calendar access request failed.", "日历访问权限请求失败。") }
-    var shareCalCalendarReady: String { text("ShareCal calendar is ready.", "ShareCal 日历已准备好。") }
-    var shareCalCalendarCreationFailed: String { text("ShareCal calendar creation failed.", "ShareCal 日历创建失败。") }
+    var shareCalCalendarReady: String { text("Shared calendar is ready.", "共享日历已准备好。") }
+    var shareCalCalendarCreationFailed: String { text("Shared calendar creation failed.", "共享日历创建失败。") }
     var cloudKitSyncDisabledLocalBuild: String {
         text(
             "CloudKit sync is disabled in the Personal Team debug build.",
@@ -2043,7 +2043,7 @@ enum PairingSettingsPlan {
 
     static func randomDisplayName(randomNumber: () -> Int = { Int.random(in: 0...9_999) }) -> String {
         let number = max(0, min(9_999, randomNumber()))
-        return String(format: "ShareCal %04d", number)
+        return String(format: "OurDays %04d", number)
     }
 
     static func normalizedDisplayName(_ displayName: String?) -> String? {

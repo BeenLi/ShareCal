@@ -27,7 +27,7 @@ enum CalendarAccessError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noWritableCalendarSource:
-            "ShareCal could not find a writable calendar source."
+            "OurDays could not find a writable calendar source."
         }
     }
 }

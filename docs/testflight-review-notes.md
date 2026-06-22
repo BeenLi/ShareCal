@@ -17,7 +17,7 @@ ShareCal is a private shared calendar beta for invited couples. It lets two invi
 
 ### What to Test
 
-Please test the first-run flow, calendar permission request, selected calendar sync, iCloud share creation, paired schedule view, event invitation acceptance, and comments on shared events. If you do not have a second test device available, open the Calendar tab and tap "Load Sample Schedule" to preview the paired timeline, sample invitation, and sample comment data.
+Please test the first-run flow, calendar permission request, selected calendar sync, iCloud share creation, paired schedule view, event invitation acceptance, and comments on shared events. On a single device the side-by-side dual-column schedule shows your own events in the "me" column; the partner column, invitations, and comments require a second iCloud user paired via Settings > iCloud Share. (There is no in-app sample-data button.)
 
 ### Feedback Email
 
@@ -25,25 +25,24 @@ Use the same support email configured for the Apple Developer account, or a moni
 
 ## Beta App Review Notes
 
-ShareCal is being submitted for private TestFlight beta testing, not for public App Store release. The beta is for invited couples who want to test private iCloud calendar sharing.
+OurDays is being submitted for private TestFlight beta testing, not for public App Store release. The beta is for invited couples who want to test private iCloud calendar sharing.
 
 Reviewer steps:
 
-1. Install ShareCal from TestFlight on an iPhone signed in to iCloud.
-2. Open Settings inside the app.
-3. Tap "Request Full Calendar Access" and grant calendar access. If no calendars are available on the review device, continue with step 6.
-4. Select one or more calendars under "Calendars to Share".
-5. Return to Calendar and tap the sync button in the top-right toolbar.
-6. If there are no real calendar events or no second reviewer device, tap "Load Sample Schedule" on the Calendar tab. This creates local preview data for both members, one sample invitation, and one sample comment.
-7. Tap an event to inspect details, add a comment, or create an invitation.
-8. Open the Invites tab to view and accept or decline the sample invitation.
-9. For two-device testing, create an iCloud share from Settings > iCloud Share, accept it on the second device, and repeat the sync/comment/invite flow.
+1. Install OurDays from TestFlight on an iPhone signed in to iCloud.
+2. Open the Settings tab.
+3. Tap "Request Full Calendar Access" and grant calendar access.
+4. Under "Calendars to Share", select a writable calendar. If the device has no suitable calendar, tap "Create Shared Calendar" to create one, then select it.
+5. OurDays only displays events mirrored from the selected calendar(s); it does not create events itself. If that calendar has no events, add one or two in Apple's Calendar app so there is something to show.
+6. Open the Calendar tab and tap the sync button in the top-right toolbar. Your events appear in the "me" column of the two-column, side-by-side schedule — the core differentiator. Switch Day/Week and tap an event for details.
+7. Invitations and comments are two-person features that require a paired partner (step 8).
+8. For two-device testing, create an iCloud share from Settings > iCloud Share, accept it on a second device signed in to a different iCloud account, then repeat the sync/comment/invite flow.
 
 Notes:
 
 - Calendar data is stored locally and in the user's private iCloud/CloudKit share.
-- ShareCal does not run its own server and does not include advertising, third-party analytics, or tracking SDKs.
-- The in-app sample data is only for review and tester onboarding; it does not upload unless the tester explicitly syncs while using a CloudKit-enabled build.
+- OurDays does not run its own server and does not include advertising, third-party analytics, or tracking SDKs.
+- There is no in-app sample/demo data feature; the side-by-side schedule is populated from the reviewer's own selected calendars, and the two-person features require a second iCloud user.
 
 ## 90-Day TestFlight Maintenance
 

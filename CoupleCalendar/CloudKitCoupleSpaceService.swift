@@ -199,7 +199,7 @@ enum CloudKitSharePermissionPlan {
     ]
 
     static func configureForLinkInvitation(_ share: CKShare) {
-        share[CKShare.SystemFieldKey.title] = "ShareCal" as CKRecordValue
+        share[CKShare.SystemFieldKey.title] = "OurDays" as CKRecordValue
         share.publicPermission = linkInvitationPublicPermission
     }
 
@@ -2886,7 +2886,7 @@ struct CloudSharingController: UIViewControllerRepresentable {
         }
 
         func itemTitle(for csc: UICloudSharingController) -> String? {
-            "ShareCal"
+            "OurDays"
         }
     }
 }

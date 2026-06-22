@@ -1160,7 +1160,7 @@ final class PairingSettingsPlanTests: XCTestCase {
     func testRandomNicknameIsReadableAndStableLength() {
         let nickname = PairingSettingsPlan.randomDisplayName(randomNumber: { 42 })
 
-        XCTAssertEqual(nickname, "ShareCal 0042")
+        XCTAssertEqual(nickname, "OurDays 0042")
     }
 }
 
